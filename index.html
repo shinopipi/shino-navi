@@ -1340,14 +1340,25 @@ function viaNames(rt){                      // 主に通る道（距離の長い
   return [...m.entries()].sort((a,b)=>b[1]-a[1]).slice(0,2).map(e=>e[0]);
 }
 async function routesTomTom(from, to, key){
-  const url = `https://api.tomtom.com/routing/1/calculateRoute/${from.lat},${from.lng}:${to.lat},${to.lng}/json?key=${encodeURIComponent(key)}`
-    + '&traffic=true&departAt=now&routeType=fastest&travelMode=car&maxAlternatives=4&computeTravelTimeFor=all'
+  const loc = `${from.lat},${from.lng}:${to.lat},${to.lng}`, k = encodeURIComponent(key);
+  const q = '&traffic=true&departAt=now&routeType=fastest&travelMode=car&maxAlternatives=4&computeTravelTimeFor=all'
     + '&sectionType=traffic&sectionType=lanes&sectionType=tollRoad&instructionsType=tagged&language=ja-JP&routeRepresentation=polyline';
-  const ctl = new AbortController(); const tm = setTimeout(()=>ctl.abort(), 12000);
-  const r = await fetch(url, {signal:ctl.signal}); clearTimeout(tm);
-  if(r.status===403 || r.status===401) throw new Error('TomTomのAPIキーが正しくありません');
-  const j = await r.json();
-  if(!j.routes || !j.routes.length) throw new Error((j.error&&j.error.description)||'ルートなし');
+  // 新しい Orbis（apiVersion=2）→ だめなら従来の Routing v1
+  const urls = [`https://api.tomtom.com/maps/orbis/routing/calculateRoute/${loc}/json?apiVersion=2&key=${k}${q}`,
+                `https://api.tomtom.com/maps/orbis/routing/calculateRoute/${loc}/json?apiVersion=2&key=${k}&traffic=true&departAt=now&maxAlternatives=4&sectionType=traffic&instructionsType=text&language=ja-JP`,
+                `https://api.tomtom.com/routing/1/calculateRoute/${loc}/json?key=${k}${q}`];
+  let j = null, authErr = false, lastErr = '';
+  for(const url of urls){
+    try{
+      const ctl = new AbortController(); const tm = setTimeout(()=>ctl.abort(), 12000);
+      const r = await fetch(url, {signal:ctl.signal}); clearTimeout(tm);
+      if(r.status===401 || r.status===403){ authErr = true; continue; }
+      const jj = await r.json();
+      if(jj.routes && jj.routes.length){ j = jj; break; }
+      lastErr = (jj.detailedError&&jj.detailedError.message) || (jj.error&&jj.error.description) || ('エラー '+r.status);
+    }catch(e){ lastErr = e.message; }
+  }
+  if(!j) throw new Error(authErr ? 'APIキーが使えません（キー、またはRouting APIの許可を確認）' : lastErr || 'ルートなし');
   return j.routes.map(rt=>{
     const coords = rt.legs.flatMap(l=>l.points).map(p=>({lat:p.latitude, lng:p.longitude}));
     const ins = (rt.guidance && rt.guidance.instructions) || [];
@@ -1504,7 +1515,9 @@ function openSettings(){
 $('#btnSettings').onclick = openSettings;
 $('#setClose').onclick = ()=>$('#settings').classList.add('hide');
 $('#setSave').onclick = ()=>{
-  const k = $('#ttKeyIn').value.trim(), had = !!ttKey();
+  let k = $('#ttKeyIn').value.trim(); const mm = k.match(/[?&]key=([^&\s]+)/); if(mm) k = decodeURIComponent(mm[1]);
+  if(/YOUR|API-KEY/i.test(k)){ toast('それは例の文字です。my.tomtom.com でコピーした自分のキーを貼ってください', 4500); return; }
+  const had = !!ttKey();
   try{ if(k) localStorage.setItem('tt_key',k); else localStorage.removeItem('tt_key'); localStorage.setItem('tt_flow', $('#ttFlowIn').checked?'1':'0'); }catch(e){}
   $('#settings').classList.add('hide');
   if(mapReady && map.getLayer('ttflow')) map.setLayoutProperty('ttflow','visibility',$('#ttFlowIn').checked?'visible':'none');
