@@ -10,6 +10,8 @@
 - ルートを外れたら自動で再検索
 - 速度メーター、案内中は画面が消えない
 - テスト走行（ルート上を3倍速で走るシミュレーション）
+- 交通規制の表示：一方通行（青い矢印）、駐車禁止、時間帯通行禁止（今が禁止時間なら赤、時間外はオレンジ）
+- ルート検索は検索した時刻の時間帯通行禁止を考慮（Valhalla。つながらない時は OSRM）
 
 ## 使い方
 
@@ -19,7 +21,8 @@ GitHub Pages で公開したページを iPhone の Safari で開き、「ホー
 ## 使っているもの
 
 - 地図：OpenFreeMap（OpenStreetMap）＋ MapLibre GL。読み込めない時は国土地理院の地図
-- ルート：OSRM 公開デモサーバー（OpenStreetMap）
+- ルート：Valhalla 公開サーバー（FOSSGIS）、予備に OSRM 公開デモサーバー
+- 規制データ：OpenStreetMap（Overpass API）。登録されていない規制は表示されません
 - 検索：Nominatim（OpenStreetMap）、国土地理院 住所検索
 - 表示：進行方向が上の3D地図、車線案内、夜モード、横画面対応
 

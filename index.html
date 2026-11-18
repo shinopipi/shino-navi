@@ -93,7 +93,7 @@ body.navi #fab{bottom:calc(96px + var(--sb))}
 .fab svg{width:24px;height:24px;fill:var(--acc)}
 #recenter{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(140px + var(--sb));z-index:21;background:var(--card);color:var(--acc);
   border-radius:24px;padding:12px 20px;font-weight:600;box-shadow:var(--shadow)}
-#toast{position:fixed;left:50%;top:calc(50% - 30px);transform:translateX(-50%);z-index:50;background:#323232;color:#fff;padding:12px 18px;border-radius:8px;font-size:15px;max-width:90vw;text-align:center}
+#toast{white-space:pre-line;position:fixed;left:50%;top:calc(50% - 30px);transform:translateX(-50%);z-index:50;background:#323232;color:#fff;padding:12px 18px;border-radius:8px;font-size:15px;max-width:90vw;text-align:center}
 
 .car{width:50px;height:50px;filter:drop-shadow(0 2px 3px #0006)}
 .pin{width:30px;height:42px;filter:drop-shadow(0 2px 2px #0005)}
@@ -140,6 +140,7 @@ body.navi #fab{bottom:calc(96px + var(--sb))}
 </div>
 
 <div id="fab">
+  <button class="fab" id="btnRules" title="交通規制" style="font-size:20px">⛔</button>
   <button class="fab" id="btnView" title="地図の向き">3D</button>
   <button class="fab" id="btnNight" title="昼夜">🌙</button>
   <button class="fab" id="btnVoice" title="音声">🔊</button>
@@ -251,7 +252,7 @@ async function initMap(){
   map = new maplibregl.Map({container:'map', style, center:[139.9254,35.8717], zoom:15, maxPitch:70,
     attributionControl:{compact:true, customAttribution:'ルート: OSRM / © OpenStreetMap'}});
   map.on('load', ()=>{
-    add3DBuildings(); addRouteLayers(); mapReady = true; applyTheme();
+    add3DBuildings(); addRouteLayers(); mapReady = true; addRuleLayers(); applyTheme();
     if(RT) drawRoute();
   });
   const userMove = e => { if(navigating && e.originalEvent){ follow=false; $('#recenter').classList.remove('hide'); } };
@@ -329,7 +330,7 @@ function applyTheme(){
   const P = night ? THEMES.night : THEMES.day;
   if(!document.body.classList.contains('raster')){
     map.getStyle().layers.forEach(l=>{
-      if(/^(route|done)/.test(l.id)) return;
+      if(/^(route|done|rule)/.test(l.id)) return;
       const p = themePaint(l,P);
       for(const k in p){ try{ map.setPaintProperty(l.id,k,p[k]); }catch(e){} }
     });
@@ -459,6 +460,197 @@ function camera(dnext){
     padding, duration:sim?480:950, easing:t=>t, essential:true});
 }
 
+/* ================= 交通規制の表示 =================
+   一方通行   : 地図データの oneway から青い矢印
+   駐車禁止   : OpenStreetMap の parking:* = no など（Overpass APIで取得）
+   時間帯通行禁止 : motor_vehicle:conditional など（例: no @ (Mo-Fr 07:00-09:00)） */
+let rulesOn = true;
+const ruleCache = new Map();
+const fetchedBoxes = [];
+let ovTimer = null, ovBusy = false;
+
+function makeIcon(w, h, draw){
+  const k=2, c=document.createElement('canvas'); c.width=w*k; c.height=h*k;
+  const g=c.getContext('2d'); g.scale(k,k); draw(g);
+  return {img:g.getImageData(0,0,w*k,h*k), opt:{pixelRatio:k}};
+}
+function addRuleIcons(){
+  const icons = {
+    // 一方通行（青地に白い矢印。線の向きに沿って置く）
+    'sign-oneway': makeIcon(34,18,g=>{
+      g.fillStyle='#1d5fbf'; g.strokeStyle='#fff'; g.lineWidth=1.5; g.beginPath(); if(g.roundRect) g.roundRect(1,1,32,16,3); else g.rect(1,1,32,16); g.fill(); g.stroke();
+      g.fillStyle='#fff'; g.beginPath(); g.moveTo(5,7); g.lineTo(20,7); g.lineTo(20,3.5); g.lineTo(29,9); g.lineTo(20,14.5); g.lineTo(20,11); g.lineTo(5,11); g.closePath(); g.fill(); }),
+    // 駐車禁止（青地・赤い輪・赤い斜線）
+    'sign-park': makeIcon(26,26,g=>{
+      g.fillStyle='#fff'; g.beginPath(); g.arc(13,13,12.5,0,7); g.fill();
+      g.fillStyle='#1e50a2'; g.beginPath(); g.arc(13,13,11,0,7); g.fill();
+      g.strokeStyle='#d71920'; g.lineWidth=3; g.beginPath(); g.arc(13,13,9.5,0,7); g.stroke();
+      g.beginPath(); g.moveTo(6.3,6.3); g.lineTo(19.7,19.7); g.stroke(); }),
+    // 車両通行止め（白地・赤い輪）
+    'sign-time': makeIcon(28,28,g=>{
+      g.fillStyle='#fff'; g.beginPath(); g.arc(14,14,13.5,0,7); g.fill();
+      g.strokeStyle='#d71920'; g.lineWidth=4; g.beginPath(); g.arc(14,14,10.5,0,7); g.stroke();
+      g.fillStyle='#d71920'; g.font='bold 7px sans-serif'; g.textAlign='center'; g.fillText('時間',14,16.5); })
+  };
+  for(const id in icons){ if(!map.hasImage(id)) map.addImage(id, icons[id].img, icons[id].opt); }
+}
+
+function addRuleLayers(){
+  addRuleIcons();
+  const st = map.getStyle();
+  // 元の地図の一方通行矢印は消して、日本の標識風に置き換える
+  st.layers.forEach(l=>{ if(/one_?way/i.test(l.id)) map.setLayoutProperty(l.id,'visibility','none'); });
+  const src = Object.keys(st.sources).find(k=>st.sources[k].type==='vector');
+  const before = firstSymbolId();
+  if(src){
+    map.addLayer({id:'rule-oneway', type:'symbol', source:src, 'source-layer':'transportation', minzoom:15,
+      filter:['any',['==',['get','oneway'],1],['==',['get','oneway'],-1]],
+      layout:{'symbol-placement':'line','symbol-spacing':160,'icon-image':'sign-oneway','icon-size':['interpolate',['linear'],['zoom'],15,.55,18,.85],
+        'icon-rotate':['match',['get','oneway'],-1,180,0],'icon-rotation-alignment':'map','icon-allow-overlap':true,'icon-ignore-placement':true}});
+  }
+  map.addSource('rules', {type:'geojson', data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'rule-park-line', type:'line', source:'rules', filter:['==',['get','kind'],'park'], minzoom:14,
+    paint:{'line-color':'#d71920','line-width':['interpolate',['linear'],['zoom'],14,1.5,18,4],'line-opacity':.45,'line-dasharray':[2,1.5]}}, before);
+  map.addLayer({id:'rule-time-line', type:'line', source:'rules', filter:['==',['get','kind'],'time'], minzoom:13,
+    layout:{'line-cap':'round'},
+    paint:{'line-color':['case',['get','active'],'#d71920','#f29900'],'line-width':['interpolate',['linear'],['zoom'],13,2,18,7],
+      'line-opacity':.85,'line-dasharray':[1.2,1]}}, before);
+  map.addLayer({id:'rule-park-icon', type:'symbol', source:'rules', filter:['==',['get','kind'],'park'], minzoom:15.5,
+    layout:{'symbol-placement':'line','symbol-spacing':260,'icon-image':'sign-park','icon-size':.8,'icon-rotation-alignment':'viewport','icon-allow-overlap':false}});
+  const hasGlyphs = !!st.glyphs;
+  map.addLayer({id:'rule-time-icon', type:'symbol', source:'rules', filter:['==',['get','kind'],'time'], minzoom:14,
+    layout:hasGlyphs ? {'symbol-placement':'line','symbol-spacing':300,'icon-image':'sign-time','icon-size':.9,'icon-rotation-alignment':'viewport',
+      'text-field':['get','label'],'text-size':11,'text-offset':[0,1.7],'text-anchor':'top','text-rotation-alignment':'viewport','text-allow-overlap':false,
+      'text-font':['Noto Sans Bold','Noto Sans Regular']}
+      : {'symbol-placement':'line','symbol-spacing':300,'icon-image':'sign-time','icon-size':.9,'icon-rotation-alignment':'viewport'},
+    paint:{'icon-opacity':['case',['get','active'],1,.6],'text-color':['case',['get','active'],'#d71920','#b06000'],'text-halo-color':'#fff','text-halo-width':1.6}});
+  ['rule-time-icon','rule-time-line','rule-park-icon','rule-park-line'].forEach(id=>map.on('click', id, e=>{
+    const p = e.features[0].properties;
+    toast(p.kind==='time' ? `⛔ 時間帯通行禁止：${p.label}${p.active?'（今は通行できません）':'（今は通行できます）'}${p.name?'\n'+p.name:''}`
+                          : `🅿️ 駐車禁止${p.name?'：'+p.name:''}`, 4000);
+  }));
+  map.on('moveend', ()=>{ clearTimeout(ovTimer); ovTimer = setTimeout(loadRules, 900); });
+  setRulesVisible(rulesOn);
+  loadRules();
+}
+function setRulesVisible(v){
+  rulesOn = v; $('#btnRules').style.opacity = v ? 1 : .45;
+  ['rule-oneway','rule-park-line','rule-time-line','rule-park-icon','rule-time-icon'].forEach(id=>{
+    if(map.getLayer(id)) map.setLayoutProperty(id,'visibility',v?'visible':'none'); });
+  if(v) loadRules();
+}
+$('#btnRules').onclick = ()=>{ setRulesVisible(!rulesOn); toast(rulesOn?'交通規制の表示：オン':'交通規制の表示：オフ'); };
+
+/* ---- 時間の条件を読む（例: "Mo-Fr 07:00-09:00; Sa 08:00-10:00"）---- */
+const WD = {Su:0,Mo:1,Tu:2,We:3,Th:4,Fr:5,Sa:6}, WJ = ['日','月','火','水','木','金','土'];
+function parseDays(tok){
+  const set = new Set(), names=[];
+  tok.split(',').forEach(t=>{ t=t.trim(); const m=t.match(/^(Su|Mo|Tu|We|Th|Fr|Sa)(?:-(Su|Mo|Tu|We|Th|Fr|Sa))?$/);
+    if(!m) return; const a=WD[m[1]], b=m[2]!=null?WD[m[2]]:a; let d=a;
+    for(let i=0;i<7;i++){ set.add(d); if(d===b) break; d=(d+1)%7; }
+    names.push(WJ[a]+(m[2]?'-'+WJ[b]:'')); });
+  return {set, text:names.join('・')};
+}
+function parseRule(str){                 // → [{days:Set|null, ranges:[[s,e]]}] / 時間以外の条件なら null
+  const rules=[];
+  for(let part of str.split(';')){
+    part = part.trim(); if(!part) continue;
+    const m = part.match(/^((?:(?:Su|Mo|Tu|We|Th|Fr|Sa|PH|SH)(?:-(?:Su|Mo|Tu|We|Th|Fr|Sa))?\s*,?\s*)+)?\s*(.*)$/);
+    const dayTok = (m[1]||'').replace(/\b(PH|SH)\b,?/g,'').trim().replace(/,$/,'');
+    const timeTok = (m[2]||'').trim();
+    const days = dayTok ? parseDays(dayTok) : null;
+    const ranges=[];
+    if(timeTok){
+      for(const t of timeTok.split(',')){ const r=t.trim().match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/); if(!r) return null;
+        ranges.push([+r[1]*60+ +r[2], +r[3]*60+ +r[4]]); }
+    } else if(!days) return null;
+    rules.push({days, ranges});
+  }
+  return rules.length ? rules : null;
+}
+function isActive(rules, now=new Date()){
+  const d=now.getDay(), t=now.getHours()*60+now.getMinutes(), yd=(d+6)%7;
+  return rules.some(r=>{
+    if(!r.ranges.length) return !r.days || r.days.set.has(d);
+    return r.ranges.some(([s,e])=> e>s ? ((!r.days||r.days.set.has(d)) && t>=s && t<e)
+                                       : (((!r.days||r.days.set.has(d)) && t>=s) || ((!r.days||r.days.set.has(yd)) && t<e)));
+  });
+}
+function ruleLabel(rules){
+  const hm = m => Math.floor(m/60)+':'+String(m%60).padStart(2,'0');
+  return rules.map(r=>[(r.days?r.days.text:''), r.ranges.map(([s,e])=>hm(s)+'-'+hm(e)).join(',')].filter(Boolean).join(' ')).join(' / ');
+}
+function readConditional(tags){       // 「通行禁止」の時間帯だけ取り出す
+  const keys = ['motor_vehicle:conditional','vehicle:conditional','motorcar:conditional','access:conditional'];
+  const all=[];
+  keys.forEach(k=>{ const v=tags[k]; if(!v) return;
+    const re=/(no|private|destination|delivery)\s*@\s*(\(([^)]*)\)|([^;]+))/g; let m;
+    while((m=re.exec(v))){ if(m[1]!=='no' && m[1]!=='private') continue;
+      const rules=parseRule(m[3]||m[4]||''); if(rules) all.push(...rules); }
+  });
+  return all.length ? all : null;
+}
+function isNoParking(tags){
+  return Object.keys(tags).some(k=>/^parking:(lane:|condition:)?(both|left|right)(:restriction)?$/.test(k) && /^(no|no_parking|no_stopping|no_standing)$/.test(tags[k]));
+}
+
+async function loadRules(){
+  if(!mapReady || !rulesOn || ovBusy || map.getZoom()<14) return;
+  const c = shown && navigating ? shown : map.getCenter();
+  const r = .006;   // 約600m四方
+  if(fetchedBoxes.some(f=>c.lat-r>=f[0] && c.lng-r>=f[1] && c.lat+r<=f[2] && c.lng+r<=f[3])) return;
+  const R2 = .015, box = [c.lat-R2, c.lng-R2, c.lat+R2, c.lng+R2], bb = box.map(x=>x.toFixed(5)).join(',');
+  const q = `[out:json][timeout:20];(
+way["highway"]["motor_vehicle:conditional"](${bb});
+way["highway"]["vehicle:conditional"](${bb});
+way["highway"]["motorcar:conditional"](${bb});
+way["highway"]["access:conditional"](${bb});
+way["highway"][~"^parking:"~"^no"](${bb}););out tags geom;`;
+  ovBusy = true;
+  for(const ep of ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter']){
+    try{
+      const res = await fetch(ep+'?data='+encodeURIComponent(q)); if(!res.ok) continue;
+      const j = await res.json();
+      j.elements.forEach(el=>{
+        if(!el.geometry || ruleCache.has(el.id)) return;
+        const tags = el.tags||{}, coords = el.geometry.map(g=>[g.lon,g.lat]);
+        const cond = readConditional(tags);
+        if(cond) ruleCache.set(el.id, {kind:'time', rules:cond, label:ruleLabel(cond), name:tags.name||'', coords});
+        else if(isNoParking(tags)) ruleCache.set('p'+el.id, {kind:'park', name:tags.name||'', coords});
+      });
+      fetchedBoxes.push(box);
+      break;
+    }catch(e){}
+  }
+  ovBusy = false;
+  refreshRules();
+}
+function refreshRules(){
+  if(!mapReady || !map.getSource('rules')) return;
+  const now = new Date(), feats=[];
+  ruleCache.forEach(v=>{
+    const active = v.kind==='time' ? isActive(v.rules, now) : false;
+    feats.push({type:'Feature', properties:{kind:v.kind, label:v.label||'', name:v.name, active},
+      geometry:{type:'LineString', coordinates:v.coords}});
+  });
+  map.getSource('rules').setData({type:'FeatureCollection', features:feats});
+}
+setInterval(refreshRules, 60000);
+
+// ルートが「今通れない時間帯通行禁止の道」を通っていないか確認（読み込んだ範囲だけ）
+function checkRouteRules(){
+  if(!RT) return;
+  const now = new Date(); let hit = null;
+  ruleCache.forEach(v=>{
+    if(hit || v.kind!=='time' || !isActive(v.rules, now)) return;
+    const pts = v.coords.map(c=>({lng:c[0],lat:c[1]}));
+    let near = 0;
+    for(const p of pts){ if(RT.coords.some(c=>Math.abs(c.lat-p.lat)<.0002 && Math.abs(c.lng-p.lng)<.00025 && dist(c,p)<12)) near++; }
+    if(near>=2) hit = v;
+  });
+  if(hit) toast(`⚠️ このルートは時間帯通行禁止（${hit.label}）の道を通る可能性があります。標識を確認してください`, 6000);
+}
+
 /* ================= 検索 ================= */
 function recent(){ try{ return JSON.parse(localStorage.getItem('navi_recent')||'[]'); }catch(e){ return []; } }
 function saveRecent(d){ try{ const list=recent().filter(x=>x.name!==d.name); list.unshift({name:d.name,lat:d.lat,lng:d.lng}); localStorage.setItem('navi_recent',JSON.stringify(list.slice(0,8))); }catch(e){} }
@@ -532,25 +724,61 @@ async function setDest(lat, lng, name){
   }
 }
 
-async function calcRoute(from, to){
-  const url = `https://router.project-osrm.org/route/v1/driving/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson&steps=true`;
-  const res = await fetch(url);
-  const j = await res.json();
-  if(j.code!=='Ok' || !j.routes.length) throw new Error(j.message||j.code||'エラー');
-  const rt = j.routes[0];
-  const coords = rt.geometry.coordinates.map(c=>({lng:c[0], lat:c[1]}));
+/* ================= ルート検索 =================
+   1) Valhalla（出発時刻＝検索した時刻 を渡す → 時間帯通行禁止を考慮）
+   2) だめなら OSRM（時間帯の規制は考慮しない） */
+const VT = {1:['depart','straight'],2:['depart','right'],3:['depart','left'],4:['arrive','straight'],5:['arrive','right'],6:['arrive','left'],
+  7:['new name','straight'],8:['continue','straight'],9:['turn','slight right'],10:['turn','right'],11:['turn','sharp right'],12:['turn','uturn'],
+  13:['turn','uturn'],14:['turn','sharp left'],15:['turn','left'],16:['turn','slight left'],17:['on ramp','straight'],18:['on ramp','right'],
+  19:['on ramp','left'],20:['off ramp','right'],21:['off ramp','left'],22:['fork','straight'],23:['fork','right'],24:['fork','left'],
+  25:['merge','straight'],26:['roundabout','straight'],27:['continue','straight'],37:['merge','right'],38:['merge','left']};
+function decode6(str){ let i=0,lat=0,lng=0; const out=[];
+  while(i<str.length){ let b,s=0,r=0;
+    do{ b=str.charCodeAt(i++)-63; r|=(b&31)<<s; s+=5; }while(b>=32); lat += (r&1)?~(r>>1):(r>>1); s=0; r=0;
+    do{ b=str.charCodeAt(i++)-63; r|=(b&31)<<s; s+=5; }while(b>=32); lng += (r&1)?~(r>>1):(r>>1);
+    out.push({lat:lat/1e6, lng:lng/1e6}); }
+  return out; }
+function buildRT(coords, steps, duration, engine){
   const cum=[0]; for(let i=1;i<coords.length;i++) cum.push(cum[i-1]+dist(coords[i-1],coords[i]));
-  const steps = rt.legs[0].steps;
   let j0 = 0;
   steps.forEach(s=>{
+    if(s._idx!=null){ s._at = cum[Math.min(s._idx,cum.length-1)]; return; }
     const ml = {lng:s.maneuver.location[0], lat:s.maneuver.location[1]};
     let bi=j0, bd=Infinity;
     for(let i=j0;i<coords.length;i++){ const d=dist(coords[i],ml); if(d<bd){bd=d;bi=i;} if(bd<0.5) break; }
     j0 = bi; s._at = cum[bi];
   });
-  RT = {coords, cum, steps, distance:cum[cum.length-1], duration:rt.duration, lastIdx:0};
+  return {coords, cum, steps, distance:cum[cum.length-1], duration, lastIdx:0, engine, time:Date.now()};
+}
+async function routeValhalla(from, to){
+  const req = {locations:[{lat:from.lat,lon:from.lng},{lat:to.lat,lon:to.lng}], costing:'auto', units:'kilometers',
+               language:'ja-JP', date_time:{type:0}};   // type:0 = 今出発（今の時刻の規制で探す）
+  const ctl = new AbortController(); const tm = setTimeout(()=>ctl.abort(), 9000);
+  const r = await fetch('https://valhalla1.openstreetmap.de/route?json='+encodeURIComponent(JSON.stringify(req)), {signal:ctl.signal});
+  clearTimeout(tm);
+  const j = await r.json();
+  if(!j.trip) throw new Error(j.error||'valhalla');
+  const leg = j.trip.legs[0], coords = decode6(leg.shape);
+  const steps = leg.maneuvers.map(m=>{
+    const t = VT[m.type] || ['continue','straight'], c = coords[Math.min(m.begin_shape_index,coords.length-1)];
+    return {maneuver:{type:t[0], modifier:t[1], location:[c.lng,c.lat], exit:m.roundabout_exit_count},
+            name:(m.street_names||[])[0]||'', ref:'', _idx:m.begin_shape_index};
+  });
+  return buildRT(coords, steps, j.trip.summary.time, 'valhalla');
+}
+async function routeOSRM(from, to){
+  const url = `https://router.project-osrm.org/route/v1/driving/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson&steps=true`;
+  const j = await (await fetch(url)).json();
+  if(j.code!=='Ok' || !j.routes.length) throw new Error(j.message||j.code||'エラー');
+  const rt = j.routes[0];
+  return buildRT(rt.geometry.coordinates.map(c=>({lng:c[0], lat:c[1]})), rt.legs[0].steps, rt.duration, 'osrm');
+}
+async function calcRoute(from, to){
+  try{ RT = await routeValhalla(from, to); }
+  catch(e){ RT = await routeOSRM(from, to); }
   spoken = new Set();
   drawRoute();
+  checkRouteRules();
 }
 
 function clearRoute(){
