@@ -389,22 +389,55 @@ function startGeo(){
   }, e=>{ toast('現在地を取得できません（'+e.message+'）'); }, {enableHighAccuracy:true, maximumAge:1000, timeout:20000});
 }
 
+/* ---- 向きの安定化 ----
+   ・走っている時（約11km/h以上）は GPS の進行方向
+   ・ルートに乗っている時は 道路の向き（マップマッチング）
+   ・止まっている時は スマホのコンパス
+   GPSの小さなブレでは向きを変えない */
+let compass = null, compassOn = false, lastFix = null, shown = null, onRoute = false, lastCompassCam = 0;
+function angDiff(a,b){ return ((b-a+540)%360)-180; }
+function turnTo(target, k){ heading = (heading + angDiff(heading,target)*k + 360) % 360; }
+function startCompass(){
+  if(compassOn) return; compassOn = true;
+  const h = e=>{
+    let c = null;
+    if(e.webkitCompassHeading!=null) c = e.webkitCompassHeading;            // iPhone
+    else if(e.absolute && e.alpha!=null) c = 360 - e.alpha;                 // Android
+    if(c==null) return;
+    const so = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+    compass = (c + so + 360) % 360;
+    if(speed<3 && !(navigating && onRoute)){                              // 止まっている時だけ使う
+      turnTo(compass, .2);
+      if(carMarker) carMarker.setRotation(heading);
+      if(navigating && Date.now()-lastCompassCam>700){ lastCompassCam=Date.now(); camera(); }
+    }
+  };
+  const add = ()=>{ window.addEventListener('deviceorientationabsolute',h); window.addEventListener('deviceorientation',h); };
+  if(window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission==='function'){
+    DeviceOrientationEvent.requestPermission().then(r=>{ if(r==='granted') add(); }).catch(()=>{ compassOn=false; });
+  } else add();
+}
+document.addEventListener('click', startCompass, {once:true});
+
 function onPos(lat,lng,hd,spd,acc){
   const np = {lat,lng};
-  if(hd!=null && !isNaN(hd) && spd!=null && spd>1.5) heading = hd;
-  else if(pos && dist(pos,np)>4) heading = bearing(pos,np);
-  pos = np; speed = spd>0 ? spd : 0; accuracy = acc || 20;
+  speed = spd>0 ? spd : 0; accuracy = acc || 20;
+  const moved = lastFix ? dist(lastFix,np) : 0;
+  if(speed>=3 && hd!=null && !isNaN(hd) && hd>=0) turnTo(hd, sim?1:.6);
+  else if(lastFix && moved > Math.max(10, accuracy)) turnTo(bearing(lastFix,np), .6);
+  if(!lastFix || moved > Math.max(10, accuracy)) lastFix = np;
+  pos = np; shown = np;
 
   if(!carMarker) carMarker = makeCar().setLngLat([lng,lat]).addTo(map);
-  else carMarker.setLngLat([lng,lat]);
-  carMarker.setRotation(heading);
   $('#spd').textContent = Math.round(speed*3.6);
 
   if(!centered){ centered=true; map.jumpTo({center:[lng,lat], zoom:16}); }
-  if(navigating) updateNav();
+  if(navigating) updateNav();                // ルート上ならここで位置と向きを道路に合わせる
+  carMarker.setLngLat([shown.lng,shown.lat]).setRotation(heading);
 }
 
 $('#btnLoc').onclick = () => {
+  startCompass();
   if(!pos){ toast('現在地を取得中です…'); return; }
   follow = true; $('#recenter').classList.add('hide');
   if(navigating) camera(); else map.easeTo({center:[pos.lng,pos.lat], zoom:Math.max(map.getZoom(),16), bearing:0, pitch:0});
@@ -415,14 +448,14 @@ $('#recenter').onclick = $('#btnLoc').onclick;
 let lastNext = null;
 function camera(dnext){
   if(dnext!==undefined) lastNext = dnext;
-  if(!follow || !pos) return;
+  if(!follow || !shown) return;
   let z = speed>22 ? 15.6 : speed>11 ? 16.5 : 17.2;
   if(lastNext!=null && lastNext<220) z = 18;          // 交差点の手前で拡大
   if(!is3D) z -= 0.6;
   const W=innerWidth, H=innerHeight, land = W>H && H<=540;
   const padding = land ? {top:H*0.3, bottom:0, left:Math.min(380,W*0.42), right:0}
                        : {top:H*(is3D?0.45:0.3), bottom:80, left:0, right:0};
-  map.easeTo({center:[pos.lng,pos.lat], zoom:z, bearing:northUp?0:heading, pitch:is3D?62:0,
+  map.easeTo({center:[shown.lng,shown.lat], zoom:z, bearing:northUp?0:heading, pitch:is3D?62:0,
     padding, duration:sim?480:950, easing:t=>t, essential:true});
 }
 
@@ -607,6 +640,13 @@ function pointAt(a){
 function updateNav(){
   if(!RT || rerouting){ camera(); return; }
   const pr = projectOnRoute(pos);
+  // ルートの近くなら、自車を道路の上に乗せて向きも道路に合わせる
+  onRoute = pr.d < Math.max(30, Math.min(accuracy,50));
+  if(onRoute){
+    shown = pr.pt;
+    const C = RT.coords, rb = bearing(C[pr.i], C[pr.i+1]);
+    turnTo(rb, speed<3 ? 1 : .5);
+  }
 
   // ルートから外れたら再検索
   if(!sim && pr.d > Math.max(50, accuracy*1.5)){
@@ -704,8 +744,8 @@ function stopNav(){
   if(wakeLock){ wakeLock.release().catch(()=>{}); wakeLock=null; }
   map.easeTo({pitch:0, bearing:0, padding:{top:0,bottom:0,left:0,right:0}, duration:800});
 }
-$('#btnStart').onclick = ()=>startNav(false);
-$('#btnSim').onclick = ()=>startNav(true);
+$('#btnStart').onclick = ()=>{ startCompass(); startNav(false); };
+$('#btnSim').onclick = ()=>{ startCompass(); startNav(true); };
 $('#endNav').onclick = ()=>{
   stopNav(); speechSynthesis.cancel();
   if(RT){ drawRoute(); $('#panel').classList.remove('hide'); }
