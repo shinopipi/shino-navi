@@ -1650,7 +1650,9 @@ function pickRecommended(list){
 async function calcRoute(from, to){
   routeList = await searchRoutes(from, to);
   pickRecommended(routeList);
-  selIdx = recIdx; RT = routeList[selIdx];
+  selIdx = recIdx;
+  routeList[selIdx] = await alignRoute(routeList[selIdx]);
+  RT = routeList[selIdx];
   afterRouteSet();
 }
 function afterRouteSet(){
@@ -1659,9 +1661,55 @@ function afterRouteSet(){
   checkRouteRules(); computeRouteSignals(); loadRouteSignals();
   if(!navigating){ const on = incidentsOnRoute(RT); if(on.length) toast(`⚠️ このルート上に ${[...new Set(on.map(i=>i.n))].join('・')} があります（${on.length}件）`, 4500); }
 }
-function selectRoute(i){
+async function selectRoute(i){
   if(!routeList[i]) return;
   selIdx = i; RT = routeList[i]; afterRouteSet(); renderRouteCards();
+  if(!routeList[i].aligned){
+    const a = await alignRoute(routeList[i]);
+    if(selIdx===i && !navigating){ routeList[i] = a; RT = a; afterRouteSet(); }
+  }
+}
+
+/* ================= ルートを地図の道路に重ね直す（マップマッチング） =================
+   TomTom のルート（渋滞を考えて選んだ道順）を、Valhalla の trace_route で
+   OpenStreetMap の道路の上に載せ直す。線・自車・案内地点が地図の道路と一致する */
+function enc6(pts){ let out='', pl=0, pg=0;
+  const e=v=>{ v = v<0 ? ~(v<<1) : (v<<1); let s=''; while(v>=0x20){ s+=String.fromCharCode((0x20|(v&0x1f))+63); v>>=5; } return s+String.fromCharCode(v+63); };
+  pts.forEach(p=>{ const la=Math.round(p.lat*1e6), lo=Math.round(p.lng*1e6); out+=e(la-pl)+e(lo-pg); pl=la; pg=lo; });
+  return out; }
+function nearestIdx(R, p, from=0){ let bi=from, bd=Infinity; for(let i=from;i<R.coords.length;i++){ const d=dist(R.coords[i],p); if(d<bd){bd=d;bi=i;} } return bi; }
+async function alignRoute(R){
+  if(!R || R.aligned || R.engine!=='tomtom' || R.distance>250000) return R;
+  // 30mおき程度に間引いて送る
+  const pts=[]; let last=null;
+  R.coords.forEach((c,i)=>{ if(!last || dist(last,c)>30 || i===R.coords.length-1){ pts.push(c); last=c; } });
+  const req = {encoded_polyline:enc6(pts), shape_match:'map_snap', costing:'auto',
+    trace_options:{search_radius:35, gps_accuracy:8}, directions_options:{units:'kilometers', language:'ja-JP'}};
+  try{
+    const body = JSON.stringify(req); let j = null;
+    try{   // ふつうは POST、だめなら（短いルートは）GET で
+      const ctl=new AbortController(); const tm=setTimeout(()=>ctl.abort(), 12000);
+      const r = await fetch('https://valhalla1.openstreetmap.de/trace_route', {method:'POST', body, signal:ctl.signal, headers:{'Content-Type':'text/plain'}});
+      clearTimeout(tm); j = await r.json();
+    }catch(e){
+      if(body.length < 7000){ const r = await fetch('https://valhalla1.openstreetmap.de/trace_route?json='+encodeURIComponent(body)); j = await r.json(); }
+    }
+    if(!j || !j.trip || !j.trip.legs) throw new Error((j&&j.error)||'trace');
+    let coords=[]; j.trip.legs.forEach(l=>{ const c=decode6(l.shape); if(coords.length && dist(coords[coords.length-1],c[0])<1) c.shift(); coords=coords.concat(c); });
+    if(coords.length<2) throw 0;
+    // 重ね直した線が元の長さから大きく外れていたら使わない
+    let len=0; for(let i=1;i<coords.length;i++) len+=dist(coords[i-1],coords[i]);
+    if(Math.abs(len-R.distance) > Math.max(800, R.distance*.15)) throw new Error('length');
+    // 案内（曲がる場所）は新しい線の上で位置を取り直す。車線などはそのまま
+    const steps = R.steps.map(s=>{ const t={...s}; delete t._idx; delete t._at; return t; });
+    const N = buildRT(coords, steps, R.duration, 'tomtom');
+    ['delay','noTraffic','toll','via','labels','tollInfo','time'].forEach(k=>{ if(R[k]!==undefined) N[k]=R[k]; });
+    const map0 = i=>{ const p=R.coords[Math.min(i,R.coords.length-1)]; return nearestIdx(N,p); };
+    N.traffic = (R.traffic||[]).map(t=>({...t, i0:map0(t.i0), i1:map0(t.i1)})).filter(t=>t.i1>t.i0);
+    N._tollSecs = (R._tollSecs||[]).map(s=>[map0(s[0]), map0(s[1])]);
+    N.aligned = true;
+    return N;
+  }catch(e){ R.aligned = true; return R; }   // 失敗したら元の線のまま
 }
 
 /* ---- 地図への描画：他の候補（灰色）と渋滞区間（黄・オレンジ・赤） ---- */
@@ -1748,7 +1796,8 @@ async function checkBetterRoute(){
     const list = await routesTomTom(pos, dest, ttKey());
     pickRecommended(list); const best = list[recIdx];
     if(navigating && best.duration < remainT - 180){
-      routeList = list; selIdx = recIdx; RT = best; afterRouteSet();
+      const a = await alignRoute(best); list[recIdx] = a;
+      routeList = list; selIdx = recIdx; RT = a; afterRouteSet();
       speak(`渋滞を避ける、${Math.round((remainT-best.duration)/60)}分早いルートに変更しました`);
       toast('🟢 より早いルートに変更しました', 3500);
     }
