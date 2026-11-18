@@ -266,7 +266,7 @@ body.hw #speedo,body.hw #roadNow{display:none!important}
 'use strict';
 const $ = s => document.querySelector(s);
 /* ---- いつも最新版で動かす（Safariが古いページを覚えていたら読み込み直す） ---- */
-const APP_VERSION = '2026-11-19g';
+const APP_VERSION = '2026-11-19h';
 (async()=>{ try{
   const r = await fetch(location.pathname+'?nocache='+Date.now(), {cache:'no-store'});
   const m = (await r.text()).match(/APP_VERSION = '([^']+)'/);
@@ -1376,25 +1376,28 @@ $('#btnMoreFab').onclick = ()=>$('#fab').classList.toggle('open');
 // ルート確認パネルが出ている時はボタンをその上に
 new MutationObserver(()=>document.body.classList.toggle('panelopen', !$('#panel').classList.contains('hide'))).observe($('#panel'), {attributes:true, attributeFilter:['class']});
 // 画面の大きさが変わったら地図を描き直す（Safariのアドレスバーの伸び縮み・回転）
-const fitMap = ()=>{
-  try{
-    // ホーム画面から開いた時、iPhoneが画面の高さを短く伝えてくることがある（下に黒い帯）。
-    // その時は画面全体（下のバーやボタンも含めて）を本当の画面の高さに合わせる
-    const land = window.matchMedia('(orientation: landscape)').matches;
-    const full = land ? Math.min(screen.width,screen.height) : Math.max(screen.width,screen.height);
-    const gap = full - window.innerHeight;
-    const B = document.body, H = document.documentElement;
-    if(navigator.standalone && gap > 8 && gap < 120){
-      H.style.height = B.style.height = full+'px';
-      B.style.transform = 'translateZ(0)';            // 画面に固定する部品の基準を、伸ばした body にする
-      $('#map').style.height = '100%';
-    } else { H.style.height = B.style.height = ''; B.style.transform = ''; $('#map').style.height = ''; }
-    map && map.resize(); jvMap && jvMap.resize();
-  }catch(e){} };
+// 画面の高さ合わせは「起動時」と「向きが変わった時」だけ。地図の描き直しは大きさが本当に変わった時だけ（チラつき防止）
+let stretched = null, lastSize = '';
+function applyStretch(){
+  const land = window.matchMedia('(orientation: landscape)').matches;
+  const full = land ? Math.min(screen.width,screen.height) : Math.max(screen.width,screen.height);
+  const gap = full - window.innerHeight;
+  const want = !!(navigator.standalone && gap > 8 && gap < 120);
+  if(want===stretched && (!want || document.body.style.height===full+'px')) return;
+  stretched = want;
+  const B = document.body, H = document.documentElement;
+  if(want){ H.style.height = B.style.height = full+'px'; B.style.transform = 'translateZ(0)'; $('#map').style.height = '100%'; }
+  else { H.style.height = B.style.height = ''; B.style.transform = ''; $('#map').style.height = ''; }
+}
+function resizeIfChanged(){
+  const el = $('#map'), sz = el.clientWidth+'x'+el.clientHeight;
+  if(sz===lastSize) return; lastSize = sz;
+  try{ map && map.resize(); jvMap && jvMap.resize(); }catch(e){}
+}
+const fitMap = ()=>{ try{ applyStretch(); }catch(e){} resizeIfChanged(); };
 setTimeout(fitMap, 500);
-window.addEventListener('resize', fitMap); window.addEventListener('orientationchange', ()=>setTimeout(fitMap,300));
-if(window.visualViewport) visualViewport.addEventListener('resize', fitMap);
-if(window.ResizeObserver) new ResizeObserver(fitMap).observe($('#map'));
+window.addEventListener('orientationchange', ()=>{ stretched = null; setTimeout(fitMap, 400); });
+if(window.ResizeObserver) new ResizeObserver(()=>requestAnimationFrame(resizeIfChanged)).observe($('#map'));
 
 /* ================= 事故・工事・通行止め（TomTom 交通事象） =================
    地図に見えている範囲の「今起きている」事象を取得して、アイコンで表示（2分ごとに更新）
