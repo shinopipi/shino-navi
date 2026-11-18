@@ -58,8 +58,10 @@ input{-webkit-user-select:text;user-select:text}
 .lane.on svg{fill:#fff}
 #then{display:inline-flex;align-items:center;gap:6px;margin:0 16px;background:var(--ban2);color:#fff;border-radius:0 0 12px 12px;padding:6px 14px;font-size:14px;box-shadow:var(--shadow)}
 #then svg{width:20px;height:20px}
-#jv{position:relative;margin:-10px 0 0;height:min(36vh,70vw);border-radius:0 0 14px 14px;overflow:hidden;box-shadow:var(--shadow);background:#cfe3f5}
+#jv{position:relative;margin:-10px 0 0;height:min(23vh,44vw,210px);border-radius:0 0 14px 14px;overflow:hidden;box-shadow:var(--shadow);background:#cfe3f5}
 #jvMap,#jv canvas{position:absolute;inset:0;width:100%;height:100%}
+body.night #jvMap{filter:brightness(.85)}
+body.jvon #fab{display:none}
 #jvName{position:absolute;left:50%;transform:translateX(-50%);top:16px;background:#1e50a2;color:#fff;border:2px solid #fff;border-radius:6px;padding:3px 12px;
   font-weight:800;font-size:16px;box-shadow:0 2px 6px #0006;white-space:nowrap;max-width:90%;overflow:hidden;text-overflow:ellipsis}
 #jvLanes{position:absolute;left:50%;transform:translateX(-50%);bottom:8px;display:flex;gap:3px;background:#000a;border-radius:10px;padding:5px}
@@ -160,7 +162,7 @@ body.hw #speedo,body.hw #roadNow{display:none!important}
 
 /* ===== 横画面（車のホルダー用） ===== */
 @media (orientation:landscape) and (max-height:540px){
-  #jv{height:min(46vh,220px)}
+  #jv{height:min(38vh,170px)}
   #guide{right:auto;width:min(380px,42vw)}
   #bArrow{width:80px}#bArrow svg{width:54px;height:54px}
   #bDist{font-size:34px}
@@ -573,7 +575,7 @@ function camera(dnext){
   if(!is3D) z -= 0.6;
   const W=innerWidth, H=innerHeight, land = W>H && H<=540;
   const padding = land ? {top:H*0.3, bottom:0, left:Math.min(380,W*0.42), right:0}
-                       : {top:H*(jvShown?0.58:is3D?(hwMode?0.3:0.45):0.3), bottom:hwMode?Math.min(300,H*0.35):80, left:0, right:0};
+                       : {top:H*(jvShown?0.46:is3D?(hwMode?0.3:0.45):0.3), bottom:hwMode?Math.min(300,H*0.35):80, left:0, right:0};
   map.easeTo({center:[shown.lng,shown.lat], zoom:z, bearing:northUp?0:heading, pitch:is3D?(hwMode?50:62):0,
     padding, duration:sim?480:950, easing:t=>t, essential:true});
 }
@@ -1105,7 +1107,7 @@ function drawFork(s, dnext, lanes){
 function updateJV(s, dnext, lanes, atSignal){
   const t=s.maneuver.type, m=s.maneuver.modifier||'straight';
   const show = dnext<=300 && dnext>3 && JV_TYPES.has(t) && (m!=='straight' || t==='fork' || t==='off ramp');
-  if(show!==jvShown){ jvShown=show; $('#jv').classList.toggle('hide',!show); if(show && jvMap) jvMap.resize(); }
+  if(show!==jvShown){ jvShown=show; $('#jv').classList.toggle('hide',!show); document.body.classList.toggle('jvon',show); if(show && jvMap) jvMap.resize(); }
   if(!show) return;
   const highway = hwMode || t==='fork' || t==='off ramp';
   // 交差点名（一般道）・方面看板（高速）・車線
@@ -1145,7 +1147,7 @@ function junctionName(s){
 }
 function themeJV(){
   if(!jvReady) return;
-  const P = night?THEMES.night:THEMES.day;
+  const P = THEMES.day;
   jvMap.getStyle().layers.forEach(l=>{ if(/^jv/.test(l.id)) return; const p=themePaint(l,P); for(const k in p){ try{ jvMap.setPaintProperty(l.id,k,p[k]); }catch(e){} } });
   jvMap.getStyle().layers.forEach(l=>{ if(l.type==='fill-extrusion'){ try{ jvMap.setPaintProperty(l.id,'fill-extrusion-opacity',1); }catch(e){} } });
   try{ jvMap.setSky(P.sky); }catch(e){}
@@ -1178,14 +1180,14 @@ function ensureJV(){
     m.addSource('jvend', {type:'geojson', data:{type:'FeatureCollection',features:[]}});
     const w=(a,b)=>['interpolate',['exponential',2],['zoom'],16,a,20,b];
     m.addLayer({id:'jv-shadow', type:'line', source:'jvroute', layout:{'line-join':'round','line-cap':'butt'},
-      paint:{'line-color':'#000','line-opacity':.25,'line-width':w(8,90),'line-blur':w(2,18),'line-translate':[0,3]}}, before);
+      paint:{'line-color':'#000','line-opacity':.25,'line-width':w(5,48),'line-blur':w(1,10),'line-translate':[0,3]}}, before);
     m.addLayer({id:'jv-casing', type:'line', source:'jvroute', layout:{'line-join':'round','line-cap':'butt'},
-      paint:{'line-color':'#ffffff','line-width':w(6,78)}}, before);
+      paint:{'line-color':'#ffffff','line-width':w(4,42)}}, before);
     m.addLayer({id:'jv-route', type:'line', source:'jvroute', layout:{'line-join':'round','line-cap':'butt'},
-      paint:{'line-width':w(4,62),'line-gradient':['interpolate',['linear'],['line-progress'],0,'#ff5a00',.55,'#ff9a00',1,'#ffd000']}}, before);
+      paint:{'line-width':w(3,32),'line-gradient':['interpolate',['linear'],['line-progress'],0,'#ff5a00',.55,'#ff9a00',1,'#ffd000']}}, before);
     m.addLayer({id:'jv-head', type:'symbol', source:'jvend',
       layout:{'icon-image':'jv-head','icon-rotate':['get','rot'],'icon-rotation-alignment':'map','icon-pitch-alignment':'map',
-        'icon-size':w(.15,2.2),'icon-allow-overlap':true,'icon-ignore-placement':true,'icon-anchor':'bottom'}});
+        'icon-size':w(.12,1.25),'icon-allow-overlap':true,'icon-ignore-placement':true,'icon-anchor':'bottom'}});
     jvReady = true; themeJV();
     if(jvPending){ const a=jvPending; jvPending=null; renderJVMap(...a); }
   });
@@ -1200,7 +1202,7 @@ function renderJVMap(s, dnext){
     properties:{rot:bearing({lng:e1[0],lat:e1[1]},{lng:e2[0],lat:e2[1]})}, geometry:{type:'Point',coordinates:e2}}]});
   const M=pointAlong(at), B=pointAlong(at-45);
   const H=$('#jv').clientHeight||200;
-  jvMap.jumpTo({center:[M.lng,M.lat], zoom:17.6+1.3*p, bearing:bearing(B,M), pitch:70, padding:{top:0,bottom:H*.28,left:0,right:0}});
+  jvMap.jumpTo({center:[M.lng,M.lat], zoom:16.9+1.0*p, bearing:bearing(B,M), pitch:60, padding:{top:0,bottom:H*.22,left:0,right:0}});
 }
 function jvLanesHtml(lanes){
   return lanes.map(l=>{ const ind=l.indications.filter(x=>x!=='none'); const list=ind.length?ind:['straight'];
@@ -1860,7 +1862,7 @@ function stopNav(){
   navigating = false; stopSim();
   if(hwMode){ hwMode=false; hwVotes=0; document.body.classList.remove('hw'); $('#hwPanel').classList.add('hide'); }
   document.body.classList.remove('navi');
-  ['#guide','#navBar','#speedo','#recenter','#roadNow','#sigChip','#jv'].forEach(s=>$(s).classList.add('hide')); jvShown=false;
+  ['#guide','#navBar','#speedo','#recenter','#roadNow','#sigChip','#jv'].forEach(s=>$(s).classList.add('hide')); jvShown=false; document.body.classList.remove('jvon');
   $('#searchBox').classList.remove('hide');
   if(wakeLock){ wakeLock.release().catch(()=>{}); wakeLock=null; }
   map.easeTo({pitch:0, bearing:0, padding:{top:0,bottom:0,left:0,right:0}, duration:800});
