@@ -369,17 +369,17 @@ const THEMES = {
     poi:{food:'#e8710a', shop:'#1a73e8', park:'#188038', med:'#d93025', transit:'#1967d2', def:'#70757a'},
     route:'#1a73e8', routeCase:'#ffffff', routeShadow:'#0b3d91', done:'#b9bec6',
     sky:{'sky-color':'#bcd9f5','horizon-color':'#eaf2fa','fog-color':'#f4f3f0','sky-horizon-blend':.7,'horizon-fog-blend':.8,'fog-ground-blend':.85,'atmosphere-blend':0},
-    light:{color:'#ffffff', intensity:.25}, bldOpacity:.8},
+    light:{color:'#ffffff', intensity:.25}, bldOpacity:.65},
   // 夜：濃紺ベース
   night:{bg:'#1b2330', water:'#0f2236', park:'#1e3430', wood:'#1d3130',
     land:{hospital:'#2a2b38', school:'#232c3c', shop:'#252d3a', ind:'#222a37', res:'#1b2330'},
-    bld:'#252e3c', bld3d:'#2e3848', road:'#3b4555', roadCase:'#1b2330', trunk:'#5a574d', trunkCase:'#1b2330',
-    mw:'#82704b', mwCase:'#1b2330', rail:'#384252', bnd:'#4b6878',
+    bld:'#232b38', bld3d:'#2b3442', road:'#5b677c', roadCase:'#2c3646', trunk:'#7a7460', trunkCase:'#2c3646',
+    mw:'#9a8558', mwCase:'#2c3646', rail:'#384252', bnd:'#4b6878',
     txt:'#a7b0bd', txtPlace:'#e2c597', txtWater:'#5f7fa3', halo:'#1b2330',
     poi:{food:'#f0a868', shop:'#8ab4f8', park:'#7fb48b', med:'#f28b82', transit:'#8ab4f8', def:'#a7b0bd'},
     route:'#5a9bff', routeCase:'#0d2a55', routeShadow:'#000000', done:'#4c5563',
     sky:{'sky-color':'#0b1320','horizon-color':'#1d2838','fog-color':'#1b2330','sky-horizon-blend':.7,'horizon-fog-blend':.8,'fog-ground-blend':.85,'atmosphere-blend':0},
-    light:{color:'#aab8d0', intensity:.2}, bldOpacity:.85}
+    light:{color:'#aab8d0', intensity:.2}, bldOpacity:.55}
 };
 function themePaint(l, P){
   const sl = l['source-layer']||'', id = l.id, t = l.type, pt = l.paint||{}, p = {};
@@ -1695,7 +1695,7 @@ async function setupFlow(){
   }
   if(!flowTpl){ toast('渋滞の地図表示に使えるアドレスが見つかりませんでした（キーの Traffic API を確認）', 4500); return; }
   map.addSource('ttflow', {type:'raster', tileSize:256, maxzoom:18, tiles:[flowTpl+'&t='+Date.now()], attribution:'渋滞情報 © TomTom'});
-  map.addLayer({id:'ttflow', type:'raster', source:'ttflow', minzoom:9, paint:{'raster-opacity':.8, 'raster-fade-duration':0},
+  map.addLayer({id:'ttflow', type:'raster', source:'ttflow', minzoom:9, maxzoom:15, paint:{'raster-opacity':['interpolate',['linear'],['zoom'],9,.85,14,.75,15,0], 'raster-fade-duration':0},
     layout:{visibility: ttFlowOn()?'visible':'none'}}, 'alt-casing');
   setInterval(()=>{                            // 1分ごとに最新の渋滞へ
     if(document.visibilityState!=='visible' || !map.getSource('ttflow') || !ttFlowOn()) return;
