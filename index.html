@@ -117,6 +117,7 @@ body.night .btn.go{color:#202124}
 .rb.rec{background:var(--acc);color:#fff}.rb.ok{background:#e6f4ea;color:#137333}.rb.toll{background:#fef7e0;color:#b06000}
 body.night .rb.ok{background:#173d24;color:#81c995}body.night .rb.toll{background:#3d3214;color:#fdd663}
 .rtraf{font-size:12px;font-weight:600}.rtraf.good{color:var(--eta)}.rtraf.mid{color:#e37400}.rtraf.bad{color:#d93025}
+.rinc{font-size:12px;color:#d93025;font-weight:700;margin-top:3px}
 .rvia{font-size:12px;color:var(--sub);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #engineNote{font-size:12px;color:var(--sub);margin:0 0 10px}
 #settings{position:fixed;inset:0;z-index:60;background:#0008;display:flex;align-items:center;justify-content:center;padding:20px}
@@ -343,7 +344,7 @@ async function initMap(){
     localIdeographFontFamily:'"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP","Yu Gothic",sans-serif',
     attributionControl:{compact:true, customAttribution:'ルート: OSRM / © OpenStreetMap'}});
   map.on('load', ()=>{
-    declutter(); add3DBuildings(); addRouteLayers(); addTrafficLayers(); mapReady = true; addRuleLayers(); applyTheme(); addPhotoLayers();
+    declutter(); add3DBuildings(); addRouteLayers(); addTrafficLayers(); mapReady = true; addRuleLayers(); addIncidentLayers(); applyTheme(); addPhotoLayers();
     if(RT) drawRoute();
   });
   const userMove = e => { if(navigating && e.originalEvent){ follow=false; $('#recenter').classList.remove('hide'); } };
@@ -427,7 +428,7 @@ function applyTheme(){
   const P = night ? THEMES.night : THEMES.day;
   if(!document.body.classList.contains('raster')){
     map.getStyle().layers.forEach(l=>{
-      if(/^(route|done|rule|alt|traffic|ttflow|photo)/.test(l.id)) return;
+      if(/^(route|done|rule|alt|traffic|ttflow|photo|inc)/.test(l.id)) return;
       const p = themePaint(l,P);
       for(const k in p){ try{ map.setPaintProperty(l.id,k,p[k]); }catch(e){} }
     });
@@ -1239,7 +1240,7 @@ function addPhotoLayers(){
 function photoTweaks(){
   const st = map.getStyle();
   st.layers.forEach(l=>{
-    if(/^(photo|route|done|rule|alt|traffic|ttflow|sig)/.test(l.id) || l.type==='background' || l.type==='raster') return;
+    if(/^(photo|route|done|rule|alt|traffic|ttflow|sig|inc)/.test(l.id) || l.type==='background' || l.type==='raster') return;
     const sl = l['source-layer']||'';
     const save = (k)=>{ const key=l.id+'|'+k; if(!photoSaved.has(key)) photoSaved.set(key, map.getPaintProperty(l.id,k)); };
     try{
@@ -1333,6 +1334,108 @@ function openMusic(){
 }
 $('#btnMusic').onclick = openMusic;
 $('#navMusic').onclick = openMusic;
+
+/* ================= 事故・工事・通行止め（TomTom 交通事象） =================
+   地図に見えている範囲の「今起きている」事象を取得して、アイコンで表示（2分ごとに更新）
+   ルート上の事故・通行止めは、検索時と走行中に知らせる */
+const INC = {1:{k:'acc',n:'事故'},7:{k:'lane',n:'車線規制'},8:{k:'closed',n:'通行止め'},9:{k:'work',n:'工事'},
+  14:{k:'broken',n:'故障車'},3:{k:'danger',n:'危険'},11:{k:'flood',n:'冠水'},5:{k:'danger',n:'凍結'},2:{k:'danger',n:'霧'}};
+const INC_STR = {accident:1,laneClosed:7,roadClosed:8,roadWorks:9,brokenDownVehicle:14,dangerousConditions:3,flooding:11,ice:5,fog:2};
+let incidents = [], incTimer = null, incLastBox = null, incBusy = false, incAnnounced = new Set(), incLastCheck = 0;
+function incIcons(){
+  const mk = (id, draw)=>{ if(map.hasImage(id)) return; const ic = makeIcon(34,34,draw); map.addImage(id, ic.img, ic.opt); };
+  const txt = (g,t,size,col)=>{ g.fillStyle=col; g.font=`900 ${size}px "Hiragino Sans",sans-serif`; g.textAlign='center'; g.textBaseline='middle'; g.fillText(t,17,18); };
+  mk('inc-acc', g=>{ g.fillStyle='#fff'; g.beginPath(); g.arc(17,17,16,0,7); g.fill(); g.fillStyle='#d93025'; g.beginPath(); g.arc(17,17,13.5,0,7); g.fill(); txt(g,'事故',11,'#fff'); });
+  mk('inc-work', g=>{ g.save(); g.translate(17,17); g.rotate(Math.PI/4); g.fillStyle='#fff'; g.fillRect(-12.5,-12.5,25,25); g.fillStyle='#ffc400'; g.fillRect(-10.5,-10.5,21,21); g.strokeStyle='#222'; g.lineWidth=1.5; g.strokeRect(-9,-9,18,18); g.restore(); txt(g,'工',13,'#222'); });
+  mk('inc-closed', g=>{ g.fillStyle='#fff'; g.beginPath(); g.arc(17,17,16,0,7); g.fill(); g.fillStyle='#d71920'; g.beginPath(); g.arc(17,17,13.5,0,7); g.fill(); g.fillStyle='#fff'; g.fillRect(8,14.5,18,5); });
+  mk('inc-lane', g=>{ g.fillStyle='#fff'; g.beginPath(); g.arc(17,17,16,0,7); g.fill(); g.fillStyle='#f57c00'; g.beginPath(); g.arc(17,17,13.5,0,7); g.fill(); txt(g,'規制',10,'#fff'); });
+  mk('inc-broken', g=>{ g.fillStyle='#fff'; g.beginPath(); g.moveTo(17,1); g.lineTo(33,31); g.lineTo(1,31); g.closePath(); g.fill(); g.fillStyle='#d93025'; g.beginPath(); g.moveTo(17,5); g.lineTo(29.5,28.5); g.lineTo(4.5,28.5); g.closePath(); g.fill(); g.fillStyle='#fff'; g.beginPath(); g.moveTo(17,13); g.lineTo(23,24.5); g.lineTo(11,24.5); g.closePath(); g.fill(); });
+  mk('inc-danger', g=>{ g.save(); g.translate(17,17); g.rotate(Math.PI/4); g.fillStyle='#fff'; g.fillRect(-12.5,-12.5,25,25); g.fillStyle='#ffc400'; g.fillRect(-10.5,-10.5,21,21); g.restore(); txt(g,'!',18,'#222'); });
+  mk('inc-flood', g=>{ g.fillStyle='#fff'; g.beginPath(); g.arc(17,17,16,0,7); g.fill(); g.fillStyle='#1a73e8'; g.beginPath(); g.arc(17,17,13.5,0,7); g.fill(); txt(g,'冠水',10,'#fff'); });
+}
+function addIncidentLayers(){
+  if(!ttKey()) return;
+  incIcons();
+  map.addSource('incidents', {type:'geojson', data:{type:'FeatureCollection',features:[]}});
+  map.addSource('incline', {type:'geojson', data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'inc-line', type:'line', source:'incline', minzoom:11, layout:{'line-cap':'round'},
+    paint:{'line-color':['match',['get','k'],'closed','#d71920','acc','#d93025','work','#f29900','#f57c00'],'line-width':['interpolate',['linear'],['zoom'],11,2,17,6],
+      'line-dasharray':[1,1.2],'line-opacity':.9}});
+  map.addLayer({id:'inc-icon', type:'symbol', source:'incidents', minzoom:9,
+    layout:{'icon-image':['concat','inc-',['get','k']],'icon-size':['interpolate',['linear'],['zoom'],9,.55,13,.8,17,1.05],
+      'icon-allow-overlap':true,'symbol-sort-key':['get','rank']}});
+  map.on('click','inc-icon', e=>{
+    const p = e.features[0].properties;
+    toast(`${p.n}${p.road?'（'+p.road+'）':''}\n${p.desc||''}${p.from?'\n'+p.from+(p.to?' → '+p.to:''):''}${p.delay>=60?'\n遅れ 約'+Math.round(p.delay/60)+'分':''}${p.since?'\n'+p.since+'から':''}`, 5000);
+  });
+  map.on('moveend', ()=>{ clearTimeout(incTimer); incTimer = setTimeout(loadIncidents, 1200); });
+  setInterval(()=>{ incLastBox=null; loadIncidents(); }, 120000);
+  loadIncidents();
+}
+async function loadIncidents(){
+  const key = ttKey(); if(!key || !mapReady || incBusy || map.getZoom()<9 || !map.getSource('incidents')) return;
+  const c = map.getCenter(), R = map.getZoom()>=12 ? .08 : .2;
+  const box = [c.lng-R, c.lat-R*.8, c.lng+R, c.lat+R*.8];
+  if(incLastBox && box[0]>=incLastBox[0] && box[1]>=incLastBox[1] && box[2]<=incLastBox[2] && box[3]<=incLastBox[3]) return;
+  const big = [c.lng-R*1.5, c.lat-R*1.2, c.lng+R*1.5, c.lat+R*1.2], bb = big.map(x=>x.toFixed(5)).join(',');
+  const k = encodeURIComponent(key);
+  const fields = encodeURIComponent('{incidents{type,geometry{type,coordinates},properties{id,iconCategory,magnitudeOfDelay,events{description,code},startTime,from,to,delay,roadNumbers}}}');
+  const urls = [`https://api.tomtom.com/maps/orbis/traffic/incidentDetails?apiVersion=1&key=${k}&bbox=${bb}&fields=${fields}&language=ja-JP&timeValidityFilter=present`,
+                `https://api.tomtom.com/traffic/services/5/incidentDetails?key=${k}&bbox=${bb}&fields=${fields}&language=ja-JP&timeValidityFilter=present`];
+  incBusy = true;
+  for(const u of urls){
+    try{
+      const r = await fetch(u); if(!r.ok) continue;
+      const j = await r.json(); if(!j.incidents) continue;
+      incidents = j.incidents.map(parseIncident).filter(Boolean);
+      incLastBox = big; break;
+    }catch(e){}
+  }
+  incBusy = false;
+  drawIncidents();
+}
+function parseIncident(x){
+  const p = x.properties||{}; let cat = p.iconCategory;
+  if(typeof cat==='string') cat = INC_STR[cat] ?? 0;
+  const t = INC[cat]; if(!t) return null;
+  const g = x.geometry||{}; let line = [];
+  if(g.type==='LineString') line = g.coordinates; else if(g.type==='Point') line = [g.coordinates];
+  if(!line.length) return null;
+  const mid = line[Math.floor(line.length/2)];
+  const st = p.startTime ? new Date(p.startTime) : null;
+  return {id:p.id||Math.random().toString(36), cat, k:t.k, n:t.n, line, pt:{lng:mid[0],lat:mid[1]},
+    desc:(p.events||[]).map(e=>e.description).filter(Boolean).join('、'), from:p.from||'', to:p.to||'',
+    delay:p.delay||0, road:(p.roadNumbers||[]).join(' '), since: st && !isNaN(st) ? (st.getMonth()+1)+'/'+st.getDate()+' '+fmtClock(st) : ''};
+}
+function drawIncidents(){
+  if(!mapReady || !map.getSource('incidents')) return;
+  const rank = {acc:0,closed:1,broken:2,lane:3,work:4,danger:5,flood:5};
+  map.getSource('incidents').setData({type:'FeatureCollection', features:incidents.map(i=>({type:'Feature',
+    properties:{k:i.k,n:i.n,desc:i.desc,from:i.from,to:i.to,delay:i.delay,road:i.road,since:i.since,rank:rank[i.k]??9},
+    geometry:{type:'Point',coordinates:[i.pt.lng,i.pt.lat]}}))});
+  map.getSource('incline').setData({type:'FeatureCollection', features:incidents.filter(i=>i.line.length>1).map(i=>({type:'Feature',
+    properties:{k:i.k}, geometry:{type:'LineString',coordinates:i.line}}))});
+}
+// ルート上の事故・通行止め（ルートから40m以内）
+function incidentsOnRoute(R, fromAlong=0, toAlong=Infinity){
+  if(!R) return [];
+  const out=[];
+  incidents.forEach(i=>{
+    if(!['acc','closed','broken','lane'].includes(i.k)) return;
+    const pr = (RT===R) ? projAll(i.pt) : null; if(!pr || pr.d>40) return;
+    if(pr.along>fromAlong && pr.along<toAlong) out.push({...i, along:pr.along});
+  });
+  return out.sort((a,b)=>a.along-b.along);
+}
+function checkIncidentsAhead(along){
+  if(!navigating || !incidents.length || Date.now()-incLastCheck<8000) return;
+  incLastCheck = Date.now();
+  incidentsOnRoute(RT, along+50, along+2500).forEach(i=>{
+    if(incAnnounced.has(i.id)) return; incAnnounced.add(i.id);
+    speak(`この先およそ${voiceDist(i.along-along)}、${i.n}があります。注意してください`);
+    toast(`⚠️ この先 ${fmtDist(i.along-along)}：${i.n}${i.desc?'（'+i.desc+'）':''}`, 5000);
+  });
+}
 
 /* ================= 検索 ================= */
 function recent(){ try{ return JSON.parse(localStorage.getItem('navi_recent')||'[]'); }catch(e){ return []; } }
@@ -1554,6 +1657,7 @@ function afterRouteSet(){
   spoken = new Set(); RT.lastIdx = 0;
   drawRoute(); drawAlts(); drawTraffic();
   checkRouteRules(); computeRouteSignals(); loadRouteSignals();
+  if(!navigating){ const on = incidentsOnRoute(RT); if(on.length) toast(`⚠️ このルート上に ${[...new Set(on.map(i=>i.n))].join('・')} があります（${on.length}件）`, 4500); }
 }
 function selectRoute(i){
   if(!routeList[i]) return;
@@ -1628,6 +1732,7 @@ function renderRouteCards(){
       <div class="rbadges">${(r.labels||[]).map(l=>`<span class="rb ${l==='おすすめ'?'rec':l==='渋滞なし'?'ok':(l==='有料'||l.startsWith('ETC'))?'toll':''}">${l}</span>`).join('')}${tline?`<span class="rtraf ${dcls}">${tline}</span>`:''}</div>
       <div class="rvia"></div>`;
     c.querySelector('.rvia').textContent = r.via && r.via.length ? r.via.join('・')+' 経由' : '';
+    { const keep=RT; RT=r; const on=incidentsOnRoute(r); RT=keep; if(on.length){ const w=document.createElement('div'); w.className='rinc'; w.textContent='⚠️ ルート上に '+[...new Set(on.map(i=>i.n))].join('・'); c.appendChild(w); } }
     c.onclick = ()=>selectRoute(i);
     box.appendChild(c);
   });
@@ -1838,6 +1943,7 @@ function updateNav(){
   $('#nTime').textContent = fmtDur(rs);
   $('#nEta').textContent = fmtClock(Date.now()+rs*1000);
   checkBetterRoute();
+  checkIncidentsAhead(pr.along);
 
   renderHw(pr.along);
   camera(dnext);
@@ -1862,7 +1968,7 @@ function arrive(){
 
 function startNav(withSim){
   if(!RT) return;
-  navigating = true; follow = true; lastNext = null; lastBetterCheck = Date.now(); drawAlts();
+  navigating = true; follow = true; lastNext = null; incAnnounced = new Set(); lastBetterCheck = Date.now(); drawAlts();
   document.body.classList.add('navi');
   $('#panel').classList.add('hide'); $('#searchBox').classList.add('hide'); $('#results').classList.add('hide');
   ['#guide','#navBar','#speedo'].forEach(s=>$(s).classList.remove('hide'));
