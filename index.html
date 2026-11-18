@@ -120,6 +120,7 @@ body.night .rb.ok{background:#173d24;color:#81c995}body.night .rb.toll{backgroun
 .setBox{background:var(--card);color:var(--txt);border-radius:18px;padding:18px;width:min(420px,100%);box-shadow:var(--shadow)}
 .setBox h3{margin:0 0 12px}
 .setBox label{display:block;font-size:13px;color:var(--sub);margin:8px 0 4px}
+.setBox select{width:100%;font-size:15px;padding:9px;border-radius:10px;border:1px solid var(--line);background:var(--card2);color:var(--txt)}
 .setBox input[type=text]{width:100%;font-size:15px;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--card2);color:var(--txt)}
 .setNote{font-size:12px;color:var(--sub)}.setNote a{color:var(--acc)}
 .setBox .chk{display:flex;gap:8px;align-items:center;color:var(--txt);font-size:14px;margin:10px 0 14px}
@@ -242,6 +243,8 @@ body.hw #speedo,body.hw #roadNow{display:none!important}
     <input id="ttKeyIn" type="text" autocomplete="off" placeholder="ここにキーを貼り付け">
     <p class="setNote">無料の開発者登録で取得できます：<a href="https://developer.tomtom.com/" target="_blank" rel="noopener">developer.tomtom.com</a><br>キーはこのスマホの中だけに保存されます。</p>
     <label class="chk"><input id="ttFlowIn" type="checkbox"> 地図に渋滞を色で表示する</label>
+    <label>車種（ETC料金の計算）</label>
+    <select id="carIn"><option value="normal">普通車</option><option value="kei">軽自動車</option></select>
     <div class="btns"><button class="btn" id="setClose">閉じる</button><button class="btn go" id="setSave">保存</button></div>
   </div>
 </div>
@@ -906,6 +909,7 @@ function renderHw(along){
   const cur = RT.steps.find((s,i)=>RT.steps[i+1] ? RT.steps[i+1]._at>along : true);
   $('#hwRoad').textContent = (cur && (cur.name||cur.ref)) || '高速道路';
   $('#hwSpd').textContent = Math.round(speed*3.6);
+  if(RT.tollInfo) $('#hwRoad').textContent += '　'+tollText(RT.tollInfo);
   const v = Math.max(speed, 22);                    // 予想到着時刻は 80km/h 以上で計算
   const ahead = hwFac.filter(f=>f.along > along+50).slice(0,4).reverse();   // 近いものが下
   const box = $('#hwList'); box.innerHTML = '';
@@ -1264,6 +1268,57 @@ function setPhoto(v, silent){
 }
 $('#btnPhoto').onclick = ()=>setPhoto(!photoOn);
 
+/* ================= ETC料金（概算） =================
+   公表されている計算式で、ルート上の有料区間の距離から計算
+   NEXCO等：(150円 + 距離×単価) ×1.1 → 10円単位
+     単価 普通車 24.6円/km、大都市近郊区間 29.52円/km（軽自動車は×0.8）
+     長距離逓減：100〜200km部分 25%引、200km超 30%引
+   首都高：(150円 + 距離×32.472円) ×1.1、300〜2,130円（2026年10月〜、軽は上限1,740円）
+   阪神高速：同様の式で概算（29.52円/km、300〜1,950円） */
+function carClass(){ try{ return localStorage.getItem('car_class')||'normal'; }catch(e){ return 'normal'; } }
+const r10 = x=>Math.round(x/10)*10;
+function nexcoFare(km, urban, kei){
+  let rate = (urban?29.52:24.6) * (kei?0.8:1);
+  const a=Math.min(km,100), b=Math.max(0,Math.min(km,200)-100), c=Math.max(0,km-200);
+  return r10((150 + rate*(a + b*.75 + c*.70)) * 1.1);
+}
+function cityFare(km, op, kei){
+  const rate = (op==='shutoko'?32.472:29.52) * (kei?0.8:1);
+  const max = op==='shutoko' ? (kei?1740:2130) : (kei?1590:1950);
+  return Math.max(300, Math.min(max, r10((150 + rate*Math.min(km,55)) * 1.1)));
+}
+function opOf(name){ if(/首都高/.test(name)) return 'shutoko'; if(/阪神高速/.test(name)) return 'hanshin'; return 'nexco'; }
+function isUrban(p){ return dist(p,{lat:35.681,lng:139.767})<50000 || dist(p,{lat:34.702,lng:135.496})<40000; }
+function estimateToll(R){
+  // 有料区間（ルート上の [開始m, 終了m]）
+  let segs = [];
+  if(R.engine==='tomtom' && R._tollSecs) segs = R._tollSecs.map(s=>[R.cum[s[0]], R.cum[Math.min(s[1],R.cum.length-1)]]);
+  else R.steps.forEach((s,i)=>{ const nx=R.steps[i+1]; if((s.intersections||[]).some(x=>(x.classes||[]).includes('toll'))) segs.push([s._at, nx?nx._at:R.distance]); });
+  segs = segs.filter(s=>s[1]-s[0]>200).sort((a,b)=>a[0]-b[0]);
+  const merged=[]; segs.forEach(s=>{ const l=merged[merged.length-1]; if(l && s[0]-l[1]<2000) l[1]=Math.max(l[1],s[1]); else merged.push(s.slice()); });
+  if(!merged.length) return null;
+  const kei = carClass()==='kei'; let total=0; const parts=[];
+  merged.forEach(([a,b])=>{
+    // 区間の中を運営会社ごとに分ける（道の名前で判断）
+    const pieces=[]; let op = null;
+    const inSeg = R.steps.filter(s=>s._at>=a-50 && s._at<b);
+    const firstName = (()=>{ const prev=[...R.steps].reverse().find(s=>s._at<=a+50); return prev?(prev.name||prev.ref||''):''; })();
+    op = opOf(firstName); let start=a;
+    inSeg.forEach(s=>{ const nm=s.name||s.ref||''; if(!nm) return; const o=opOf(nm); if(o!==op){ if(s._at-start>100) pieces.push([op,start,s._at]); op=o; start=Math.max(start,s._at); } });
+    pieces.push([op,start,b]);
+    // 同じ会社の連続区間はまとめる
+    const pm=[]; pieces.forEach(p=>{ const l=pm[pm.length-1]; if(l && l[0]===p[0]) l[2]=p[2]; else pm.push(p.slice()); });
+    pm.forEach(([o,s0,s1])=>{
+      const km=(s1-s0)/1000; if(km<.3) return;
+      const mi = Math.max(0, R.cum.findIndex(x=>x>=(s0+s1)/2)), mid = R.coords[mi];
+      const yen = o==='nexco' ? nexcoFare(km, isUrban(mid), kei) : cityFare(km, o, kei);
+      total += yen; parts.push({op:o, km, yen});
+    });
+  });
+  return total ? {yen:total, parts} : null;
+}
+function tollText(t){ return t ? 'ETC 約'+t.yen.toLocaleString()+'円' : ''; }
+
 /* ================= 検索 ================= */
 function recent(){ try{ return JSON.parse(localStorage.getItem('navi_recent')||'[]'); }catch(e){ return []; } }
 function saveRecent(d){ try{ const list=recent().filter(x=>x.name!==d.name); list.unshift({name:d.name,lat:d.lat,lng:d.lng}); localStorage.setItem('navi_recent',JSON.stringify(list.slice(0,8))); }catch(e){} }
@@ -1434,6 +1489,7 @@ async function routesTomTom(from, to, key){
     R.delay = rt.summary.trafficDelayInSeconds||0;
     R.noTraffic = rt.summary.noTrafficTravelTimeInSeconds || rt.summary.travelTimeInSeconds;
     R.toll = secs.some(s=>s.sectionType==='TOLL_ROAD');
+    R._tollSecs = secs.filter(s=>s.sectionType==='TOLL_ROAD').map(s=>[s.startPointIndex, s.endPointIndex]);
     R.traffic = secs.filter(s=>s.sectionType==='TRAFFIC').map(s=>({i0:s.startPointIndex, i1:s.endPointIndex, mag:s.magnitudeOfDelay??1,
       cat:s.simpleCategory||'', delay:s.delayInSeconds||0, kmh:s.effectiveSpeedInKmh}));
     R.via = viaNames(R);
@@ -1470,7 +1526,7 @@ function pickRecommended(list){
   const bestClean = clean.length ? clean.reduce((b,i)=>t(list[i])<t(list[b])?i:b, clean[0]) : fastest;
   // 渋滞なしルートが最速より10分以上遅いなら、最速を優先
   recIdx = t(list[bestClean]) - t(list[fastest]) <= 600 ? bestClean : fastest;
-  list.forEach((r,i)=>{ r.labels=[]; if(i===recIdx) r.labels.push('おすすめ'); if(i===fastest) r.labels.push('最速'); if(r.toll) r.labels.push('有料'); });
+  list.forEach((r,i)=>{ r.labels=[]; if(i===recIdx) r.labels.push('おすすめ'); if(i===fastest) r.labels.push('最速'); r.tollInfo = estimateToll(r); if(r.tollInfo) r.labels.push(tollText(r.tollInfo)); else if(r.toll) r.labels.push('有料'); });
   return recIdx;
 }
 async function calcRoute(from, to){
@@ -1547,13 +1603,14 @@ function renderRouteCards(){
   $('#engineNote').innerHTML = tomtom ? '🟢 リアルタイムの渋滞を考慮（TomTom）'
     : '⚪ 渋滞は考慮していません。<u>設定</u>でTomTomのキーを入れると、今の渋滞で探します';
   $('#engineNote').onclick = tomtom ? null : openSettings;
+  if(routeList.some(r=>r.tollInfo)) $('#engineNote').innerHTML += `<br>💴 ETC料金は${carClass()==='kei'?'軽自動車':'普通車'}の概算（割引なし）。正確な料金は各高速道路会社のサイトで確認してください`;
   routeList.forEach((r,i)=>{
     const c = document.createElement('div'); c.className='rcard'+(i===selIdx?' sel':'');
     const heavy = (r.traffic||[]).filter(x=>x.mag>=2).length, any=(r.traffic||[]).length;
     const dcls = !tomtom ? '' : heavy ? 'bad' : any ? 'mid' : 'good';
     const tline = !tomtom ? '' : (r.delay>=60 ? `渋滞 +${Math.round(r.delay/60)}分（${any}か所）` : any ? `少し混雑（${any}か所）` : '渋滞なし');
     c.innerHTML = `<div class="rtop"><span class="rtime ${dcls}">${fmtDur(r.duration)}</span><span class="rdist">${fmtDist(r.distance)}・${fmtClock(Date.now()+r.duration*1000)}着</span></div>
-      <div class="rbadges">${(r.labels||[]).map(l=>`<span class="rb ${l==='おすすめ'?'rec':l==='渋滞なし'?'ok':l==='有料'?'toll':''}">${l}</span>`).join('')}${tline?`<span class="rtraf ${dcls}">${tline}</span>`:''}</div>
+      <div class="rbadges">${(r.labels||[]).map(l=>`<span class="rb ${l==='おすすめ'?'rec':l==='渋滞なし'?'ok':(l==='有料'||l.startsWith('ETC'))?'toll':''}">${l}</span>`).join('')}${tline?`<span class="rtraf ${dcls}">${tline}</span>`:''}</div>
       <div class="rvia"></div>`;
     c.querySelector('.rvia').textContent = r.via && r.via.length ? r.via.join('・')+' 経由' : '';
     c.onclick = ()=>selectRoute(i);
@@ -1580,7 +1637,7 @@ async function checkBetterRoute(){
 
 /* ---- 設定（TomTomのキー） ---- */
 function openSettings(){
-  $('#ttKeyIn').value = ttKey(); $('#ttFlowIn').checked = ttFlowOn();
+  $('#ttKeyIn').value = ttKey(); $('#ttFlowIn').checked = ttFlowOn(); $('#carIn').value = carClass();
   $('#settings').classList.remove('hide');
 }
 $('#btnSettings').onclick = openSettings;
@@ -1589,7 +1646,8 @@ $('#setSave').onclick = ()=>{
   let k = $('#ttKeyIn').value.trim(); const mm = k.match(/[?&]key=([^&\s]+)/); if(mm) k = decodeURIComponent(mm[1]);
   if(/YOUR|API-KEY/i.test(k)){ toast('それは例の文字です。my.tomtom.com でコピーした自分のキーを貼ってください', 4500); return; }
   const had = !!ttKey();
-  try{ if(k) localStorage.setItem('tt_key',k); else localStorage.removeItem('tt_key'); localStorage.setItem('tt_flow', $('#ttFlowIn').checked?'1':'0'); }catch(e){}
+  try{ if(k) localStorage.setItem('tt_key',k); else localStorage.removeItem('tt_key'); localStorage.setItem('tt_flow', $('#ttFlowIn').checked?'1':'0'); localStorage.setItem('car_class', $('#carIn').value); }catch(e){}
+  if(routeList.length){ routeList.forEach(r=>{ r.tollInfo=estimateToll(r); r.labels=(r.labels||[]).filter(l=>!l.startsWith('ETC')&&l!=='有料'); if(r.tollInfo) r.labels.push(tollText(r.tollInfo)); else if(r.toll) r.labels.push('有料'); }); renderRouteCards(); }
   $('#settings').classList.add('hide');
   if(mapReady && map.getLayer('ttflow')) map.setLayoutProperty('ttflow','visibility',$('#ttFlowIn').checked?'visible':'none');
   toast(k ? '保存しました。次の検索から渋滞を考慮します' : '保存しました');
