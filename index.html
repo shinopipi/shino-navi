@@ -241,6 +241,7 @@ let navigating = false, follow = true, voiceOn = true;
 let is3D = true, northUp = false, night = false;
 let spoken = new Set(), offCount = 0, lastReroute = 0, rerouting = false;
 let sim = null, wakeLock = null;
+let styleBase = null, jvMap = null, jvReady = false, jvPending = null;   // 3D拡大図
 
 /* ================= 便利関数 ================= */
 function toast(msg, ms=2600){ const t=$('#toast'); t.textContent=msg; t.classList.remove('hide'); clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.add('hide'),ms); }
@@ -272,7 +273,7 @@ function speak(text){
 
 /* ================= ボタン類 ================= */
 $('#btnVoice').onclick = () => { voiceOn=!voiceOn; $('#btnVoice').textContent = voiceOn?'🔊':'🔇'; if(voiceOn) speak('音声案内オン'); else speechSynthesis.cancel(); };
-function setNight(v){ night=v; document.body.classList.toggle('night',v); $('#btnNight').textContent = v?'☀️':'🌙'; if(mapReady) applyTheme(); if(typeof themeJV==='function') themeJV(); }
+function setNight(v){ night=v; document.body.classList.toggle('night',v); $('#btnNight').textContent = v?'☀️':'🌙'; if(mapReady){ applyTheme(); themeJV(); } }
 $('#btnNight').onclick = () => setNight(!night);
 { const h=new Date().getHours(); setNight(h>=17 || h<6); }
 // 3D進行方向 → 2D進行方向 → 2D北が上
@@ -1081,7 +1082,6 @@ function updateJV(s, dnext, lanes, atSignal){
    実際の道路の形・ビルの高さ（地図データ）を、もう1つの地図で
    交差点の手前から見下ろすように表示。進むルートはオレンジ→黄色の太い矢印。
    交差点名（信号の名前）・車線・高速の方面看板を上に重ねる */
-let styleBase = null, jvMap = null, jvReady = false, jvPending = null;
 function pointAlong(a){                       // ルート上の a m 地点（状態を持たない版）
   const C=RT.coords, cum=RT.cum; a=Math.max(0,Math.min(RT.distance,a));
   let lo=0, hi=cum.length-1; while(hi-lo>1){ const m=(lo+hi)>>1; if(cum[m]<=a) lo=m; else hi=m; }
