@@ -58,6 +58,7 @@ input{-webkit-user-select:text;user-select:text}
 .lane.on svg{fill:#fff}
 #then{display:inline-flex;align-items:center;gap:6px;margin:0 16px;background:var(--ban2);color:#fff;border-radius:0 0 12px 12px;padding:6px 14px;font-size:14px;box-shadow:var(--shadow)}
 #then svg{width:20px;height:20px}
+#sigChip{display:inline-block;margin:6px 0 0 16px;vertical-align:top;background:var(--card);color:var(--txt);border-radius:14px;padding:5px 12px;font-size:14px;font-weight:600;box-shadow:var(--shadow)}
 
 /* ===== 走行中の下側（白いカード） ===== */
 #navBar{position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--card);padding:12px calc(14px + var(--sr)) calc(12px + var(--sb)) calc(18px + var(--sl));
@@ -98,6 +99,26 @@ body.navi #fab{bottom:calc(96px + var(--sb))}
 .car{width:50px;height:50px;filter:drop-shadow(0 2px 3px #0006)}
 .pin{width:30px;height:42px;filter:drop-shadow(0 2px 2px #0005)}
 
+/* ===== 高速道路モード ===== */
+body.hw #banner{background:#006b3f;box-shadow:inset 0 0 0 3px #fff,var(--shadow)}
+body.hw #lanes,body.hw #then{background:#00552f}
+body.hw #speedo,body.hw #roadNow{display:none!important}
+#hwPanel{position:fixed;left:calc(8px + var(--sl));right:calc(72px + var(--sr));bottom:calc(92px + var(--sb));z-index:20;background:var(--card);color:var(--txt);
+  border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
+#hwHead{display:flex;align-items:center;gap:8px;background:#006b3f;color:#fff;padding:7px 12px;font-weight:700;font-size:14px}
+#hwRoad{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hwHead b{font-size:20px;font-variant-numeric:tabular-nums}
+.hwRow{display:flex;align-items:center;gap:8px;padding:8px 12px;border-top:1px solid var(--line);font-size:15px}
+.hwRow:last-child{background:var(--card2);font-weight:700}
+.hwBadge{flex:none;min-width:40px;text-align:center;border-radius:5px;padding:2px 4px;font-size:12px;font-weight:800;color:#fff;background:#006b3f}
+.hwBadge.jct{background:#1a73e8}.hwBadge.sa{background:#e8710a}.hwBadge.toll{background:#5f6368}
+.hwName{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hwDist{font-variant-numeric:tabular-nums;font-weight:700}
+.hwEta{font-variant-numeric:tabular-nums;color:var(--sub);font-size:13px;width:38px;text-align:right}
+@media (orientation:landscape) and (max-height:540px){
+  #hwPanel{left:auto;right:calc(72px + var(--sr));top:calc(44px + var(--st));bottom:auto;width:min(300px,34vw)}
+}
+
 /* ===== 横画面（車のホルダー用） ===== */
 @media (orientation:landscape) and (max-height:540px){
   #guide{right:auto;width:min(380px,42vw)}
@@ -137,6 +158,7 @@ body.navi #fab{bottom:calc(96px + var(--sb))}
   </div>
   <div id="lanes" class="hide"></div>
   <div id="then" class="hide"></div>
+  <div id="sigChip" class="hide"></div>
 </div>
 
 <div id="fab">
@@ -149,6 +171,10 @@ body.navi #fab{bottom:calc(96px + var(--sb))}
 <button id="recenter" class="hide">▲ 現在地に戻る</button>
 <div id="speedo" class="hide"><b id="spd">0</b><small>km/h</small></div>
 <div id="roadNow" class="hide"></div>
+<div id="hwPanel" class="hide">
+  <div id="hwHead"><span>🛣️</span><span id="hwRoad">高速道路</span><b id="hwSpd">0</b><small>km/h</small></div>
+  <div id="hwList"></div>
+</div>
 
 <div id="panel" class="hide">
   <div id="sum"></div>
@@ -450,13 +476,13 @@ let lastNext = null;
 function camera(dnext){
   if(dnext!==undefined) lastNext = dnext;
   if(!follow || !shown) return;
-  let z = speed>22 ? 15.6 : speed>11 ? 16.5 : 17.2;
-  if(lastNext!=null && lastNext<220) z = 18;          // 交差点の手前で拡大
+  let z = hwMode ? 15 : speed>22 ? 15.6 : speed>11 ? 16.5 : 17.2;
+  if(lastNext!=null && lastNext<220) z = hwMode ? 16.5 : 18;          // 交差点の手前で拡大
   if(!is3D) z -= 0.6;
   const W=innerWidth, H=innerHeight, land = W>H && H<=540;
   const padding = land ? {top:H*0.3, bottom:0, left:Math.min(380,W*0.42), right:0}
-                       : {top:H*(is3D?0.45:0.3), bottom:80, left:0, right:0};
-  map.easeTo({center:[shown.lng,shown.lat], zoom:z, bearing:northUp?0:heading, pitch:is3D?62:0,
+                       : {top:H*(is3D?(hwMode?0.3:0.45):0.3), bottom:hwMode?Math.min(300,H*0.35):80, left:0, right:0};
+  map.easeTo({center:[shown.lng,shown.lat], zoom:z, bearing:northUp?0:heading, pitch:is3D?(hwMode?50:62):0,
     padding, duration:sim?480:950, easing:t=>t, essential:true});
 }
 
@@ -530,12 +556,13 @@ function addRuleLayers(){
                           : `🅿️ 駐車禁止${p.name?'：'+p.name:''}`, 4000);
   }));
   map.on('moveend', ()=>{ clearTimeout(ovTimer); ovTimer = setTimeout(loadRules, 900); });
+  addSignalLayer();
   setRulesVisible(rulesOn);
   loadRules();
 }
 function setRulesVisible(v){
   rulesOn = v; $('#btnRules').style.opacity = v ? 1 : .45;
-  ['rule-oneway','rule-park-line','rule-time-line','rule-park-icon','rule-time-icon'].forEach(id=>{
+  ['rule-oneway','rule-park-line','rule-time-line','rule-park-icon','rule-time-icon','sig-icon'].forEach(id=>{
     if(map.getLayer(id)) map.setLayoutProperty(id,'visibility',v?'visible':'none'); });
   if(v) loadRules();
 }
@@ -605,13 +632,15 @@ way["highway"]["motor_vehicle:conditional"](${bb});
 way["highway"]["vehicle:conditional"](${bb});
 way["highway"]["motorcar:conditional"](${bb});
 way["highway"]["access:conditional"](${bb});
-way["highway"][~"^parking:"~"^no"](${bb}););out tags geom;`;
+way["highway"][~"^parking:"~"^no"](${bb});
+node["highway"="traffic_signals"](${bb}););out tags geom;`;
   ovBusy = true;
   for(const ep of ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter']){
     try{
       const res = await fetch(ep+'?data='+encodeURIComponent(q)); if(!res.ok) continue;
       const j = await res.json();
       j.elements.forEach(el=>{
+        if(el.type==='node'){ signalCache.set(el.id,{lat:el.lat,lng:el.lon}); return; }
         if(!el.geometry || ruleCache.has(el.id)) return;
         const tags = el.tags||{}, coords = el.geometry.map(g=>[g.lon,g.lat]);
         const cond = readConditional(tags);
@@ -623,7 +652,8 @@ way["highway"][~"^parking:"~"^no"](${bb}););out tags geom;`;
     }catch(e){}
   }
   ovBusy = false;
-  refreshRules();
+  refreshRules(); refreshSignals();
+  if(RT){ computeRouteSignals(); }
 }
 function refreshRules(){
   if(!mapReady || !map.getSource('rules')) return;
@@ -649,6 +679,155 @@ function checkRouteRules(){
     if(near>=2) hit = v;
   });
   if(hit) toast(`⚠️ このルートは時間帯通行禁止（${hit.label}）の道を通る可能性があります。標識を確認してください`, 6000);
+}
+
+/* ================= 信号 ================= */
+const signalCache = new Map();     // id → {lat,lng}
+function addSignalLayer(){
+  const ic = makeIcon(30,14,g=>{
+    g.fillStyle='#fff'; g.beginPath(); if(g.roundRect) g.roundRect(0,0,30,14,4); else g.rect(0,0,30,14); g.fill();
+    g.fillStyle='#3c4043'; g.beginPath(); if(g.roundRect) g.roundRect(1.2,1.2,27.6,11.6,3.5); else g.rect(1.2,1.2,27.6,11.6); g.fill();
+    [['#22b14c',7],['#f5c400',15],['#e53935',23]].forEach(([c,x])=>{ g.fillStyle=c; g.beginPath(); g.arc(x,7,3.4,0,7); g.fill(); });
+  });
+  if(!map.hasImage('sign-signal')) map.addImage('sign-signal', ic.img, ic.opt);
+  map.addSource('signals', {type:'geojson', data:{type:'FeatureCollection',features:[]}});
+  map.addLayer({id:'sig-icon', type:'symbol', source:'signals', minzoom:14.5,
+    layout:{'icon-image':'sign-signal','icon-size':['interpolate',['linear'],['zoom'],14.5,.6,18,1],'icon-allow-overlap':true,
+      'icon-rotation-alignment':'viewport','icon-pitch-alignment':'viewport'}});
+}
+function refreshSignals(){
+  if(!mapReady || !map.getSource('signals')) return;
+  const f=[]; signalCache.forEach(v=>f.push({type:'Feature',properties:{},geometry:{type:'Point',coordinates:[v.lng,v.lat]}}));
+  map.getSource('signals').setData({type:'FeatureCollection',features:f});
+}
+// ルートからの距離と、ルート上の位置（スタートから何m）
+function projAll(p){
+  const C=RT.coords, kx=Math.cos(p.lat*Math.PI/180)*111320, ky=110540; let best={d:1e9,along:0};
+  for(let i=0;i<C.length-1;i++){
+    const ax=(C[i].lng-p.lng)*kx, ay=(C[i].lat-p.lat)*ky, bx=(C[i+1].lng-p.lng)*kx, by=(C[i+1].lat-p.lat)*ky;
+    if(Math.min(Math.abs(ax),Math.abs(bx))>300 && Math.sign(ax)===Math.sign(bx)) continue;
+    const dx=bx-ax, dy=by-ay, L2=dx*dx+dy*dy; let t=L2?-(ax*dx+ay*dy)/L2:0; t=Math.max(0,Math.min(1,t));
+    const d=Math.hypot(ax+t*dx, ay+t*dy);
+    if(d<best.d) best={d, along:RT.cum[i]+t*(RT.cum[i+1]-RT.cum[i])};
+  }
+  return best;
+}
+// ルート上の信号（交差点ごとに1つにまとめる）
+function computeRouteSignals(){
+  if(!RT) return;
+  const xs=RT.coords.map(c=>c.lng), ys=RT.coords.map(c=>c.lat);
+  const box=[Math.min(...ys)-.0005, Math.min(...xs)-.0005, Math.max(...ys)+.0005, Math.max(...xs)+.0005];
+  const al=[];
+  signalCache.forEach(v=>{
+    if(v.lat<box[0]||v.lng<box[1]||v.lat>box[2]||v.lng>box[3]) return;
+    const pr=projAll(v); if(pr.d<22) al.push(pr.along);
+  });
+  al.sort((a,b)=>a-b);
+  RT.sig = al.filter((a,i)=>i===0 || a-al[i-1]>40);
+}
+// ルート沿いの信号をまとめて取得（最初の30kmまで）
+async function loadRouteSignals(){
+  if(!RT) return;
+  const myRT = RT, pts=[]; let last=null;
+  for(let i=0;i<RT.coords.length;i++){
+    const c=RT.coords[i]; if(RT.cum[i]>30000) break;
+    if(!last || dist(last,c)>35 || i===RT.coords.length-1){ pts.push(c.lat.toFixed(5)+','+c.lng.toFixed(5)); last=c; }
+  }
+  if(pts.length<2) return;
+  const q = `[out:json][timeout:25];node["highway"="traffic_signals"](around:25,${pts.join(',')});out;`;
+  for(const ep of ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter']){
+    try{
+      const res = await fetch(ep, {method:'POST', body:'data='+encodeURIComponent(q), headers:{'Content-Type':'application/x-www-form-urlencoded'}});
+      if(!res.ok) continue;
+      const j = await res.json();
+      j.elements.forEach(el=>signalCache.set(el.id,{lat:el.lat,lng:el.lon}));
+      break;
+    }catch(e){}
+  }
+  if(RT!==myRT) return;
+  computeRouteSignals(); refreshSignals();
+}
+
+/* ================= 高速道路モード =================
+   自車の下の道路が「高速道路」なら自動で切り替え（3回続けて判定）
+   ・案内板を高速道路の緑の標識風に
+   ・地図を少し引いて先まで見せる
+   ・この先の IC / JCT / SA / PA / 料金所 を一覧で表示 */
+let hwMode = false, hwVotes = 0, hwFac = [], hwFacRT = null, hwLoading = false;
+let hwLayerIds = null;
+const HW_LAYERS = ()=> hwLayerIds || (hwLayerIds = map.getStyle().layers.filter(l=>l['source-layer']==='transportation' && l.type==='line').map(l=>l.id));
+function checkHighway(){
+  if(!mapReady || !shown || !navigating) return;
+  let onMw = false;
+  try{
+    const pt = map.project([shown.lng, shown.lat]);
+    const fs = map.queryRenderedFeatures([[pt.x-10,pt.y-10],[pt.x+10,pt.y+10]], {layers:HW_LAYERS()});
+    onMw = fs.some(f=>f.properties.class==='motorway' && f.properties.ramp!==1);
+  }catch(e){}
+  hwVotes = Math.max(-3, Math.min(3, hwVotes + (onMw?1:-1)));
+  if(!hwMode && hwVotes>=3) setHw(true);
+  else if(hwMode && hwVotes<=-3) setHw(false);
+}
+function setHw(v){
+  hwMode = v; document.body.classList.toggle('hw', v);
+  $('#hwPanel').classList.toggle('hide', !v);
+  speak(v ? '高速道路に入りました。高速道路モードに切り替えます' : '一般道に戻りました');
+  if(v && hwFacRT!==RT) loadHwFacilities();
+}
+async function loadHwFacilities(){
+  if(!RT || hwLoading) return;
+  hwLoading = true; hwFacRT = RT; const myRT = RT;
+  const start = projectOnRoute(pos).along, pts=[]; let last=null;
+  for(let i=0;i<RT.coords.length;i++){
+    if(RT.cum[i] < start-200) continue; if(RT.cum[i] > start+80000) break;
+    const c=RT.coords[i];
+    if(!last || dist(last,c)>150){ pts.push(c.lat.toFixed(5)+','+c.lng.toFixed(5)); last=c; }
+  }
+  const P = pts.join(',');
+  const q = `[out:json][timeout:25];(
+node["highway"="motorway_junction"](around:50,${P});
+nwr["highway"~"^(services|rest_area)$"](around:300,${P});
+node["barrier"="toll_booth"](around:50,${P}););out center tags;`;
+  let els = [];
+  for(const ep of ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter']){
+    try{
+      const res = await fetch(ep, {method:'POST', body:'data='+encodeURIComponent(q), headers:{'Content-Type':'application/x-www-form-urlencoded'}});
+      if(!res.ok) continue; els = (await res.json()).elements; break;
+    }catch(e){}
+  }
+  hwLoading = false;
+  if(RT!==myRT) return;
+  const list = [];
+  els.forEach(el=>{
+    const t = el.tags||{}, p = el.center ? {lat:el.center.lat,lng:el.center.lon} : {lat:el.lat,lng:el.lon};
+    let type, name = t.name || t.ref || '', lim = 70;
+    if(t.highway==='services'){ type='SA'; lim=350; }
+    else if(t.highway==='rest_area'){ type='PA'; lim=350; }
+    else if(t.barrier==='toll_booth'){ type='料金所'; }
+    else { type = /JCT|ジャンクション/.test(name) ? 'JCT' : 'IC'; }
+    if(!name) return;
+    const pr = projAll(p); if(pr.d > lim) return;
+    list.push({type, name, along:pr.along});
+  });
+  list.sort((a,b)=>a.along-b.along);
+  hwFac = list.filter((f,i)=>!list.slice(0,i).some(g=>g.name===f.name && f.along-g.along<3000));
+}
+function renderHw(along){
+  if(!hwMode) return;
+  const cur = RT.steps.find((s,i)=>RT.steps[i+1] ? RT.steps[i+1]._at>along : true);
+  $('#hwRoad').textContent = (cur && (cur.name||cur.ref)) || '高速道路';
+  $('#hwSpd').textContent = Math.round(speed*3.6);
+  const v = Math.max(speed, 22);                    // 予想到着時刻は 80km/h 以上で計算
+  const ahead = hwFac.filter(f=>f.along > along+50).slice(0,4).reverse();   // 近いものが下
+  const box = $('#hwList'); box.innerHTML = '';
+  if(!ahead.length){ box.innerHTML = `<div class="hwRow"><span class="hwName" style="color:var(--sub)">${hwLoading?'この先の施設を読み込み中…':'この先の施設情報はありません'}</span></div>`; return; }
+  ahead.forEach(f=>{
+    const d = f.along - along, row = document.createElement('div'); row.className='hwRow';
+    const cls = f.type==='SA'||f.type==='PA' ? 'sa' : f.type==='JCT' ? 'jct' : f.type==='料金所' ? 'toll' : 'ic';
+    row.innerHTML = `<span class="hwBadge ${cls}">${f.type}</span><span class="hwName"></span><span class="hwDist">${fmtDist(d)}</span><span class="hwEta">${fmtClock(Date.now()+d/v*1000)}</span>`;
+    row.querySelector('.hwName').textContent = f.name;
+    box.appendChild(row);
+  });
 }
 
 /* ================= 検索 ================= */
@@ -779,6 +958,8 @@ async function calcRoute(from, to){
   spoken = new Set();
   drawRoute();
   checkRouteRules();
+  computeRouteSignals();
+  loadRouteSignals();
 }
 
 function clearRoute(){
@@ -893,12 +1074,24 @@ function updateNav(){
   let k = RT.steps.findIndex((s,i)=>i>0 && s._at > pr.along+3);
   if(k<0) k = RT.steps.length-1;
   const s = RT.steps[k], dnext = Math.max(0, s._at - pr.along);
+  // 信号：次の信号までの距離と「○つ目の信号を右折」
+  let sigText = '';
+  const ahead = (RT.sig||[]).filter(a=>a > pr.along+10);
+  if(ahead.length && ahead[0]-pr.along < 2000){ $('#sigChip').textContent = '🚦 次の信号 '+fmtDist(ahead[0]-pr.along); $('#sigChip').classList.remove('hide'); }
+  else $('#sigChip').classList.add('hide');
+  const sm = s.maneuver.modifier||'';
+  if(s.maneuver.type==='turn' && /left|right/.test(sm)){
+    const upto = ahead.filter(a=>a <= s._at+30);
+    if(upto.length && Math.abs(upto[upto.length-1]-s._at) <= 30){
+      const n = upto.length; sigText = n===1 ? '信号を' : n<=3 ? n+'つ目の信号を' : '';
+    }
+  }
   const prevLen = s._at - (RT.steps[k-1] ? RT.steps[k-1]._at : 0);
 
   $('#bArrow').innerHTML = arrowSvg(s);
   const dp = distParts(dnext);
   $('#bDist').innerHTML = dp[0]+'<small>'+dp[1]+'</small>';
-  $('#bText').textContent = instr(s);
+  $('#bText').textContent = sigText + instr(s);
   const road = [s.name, s.ref].filter(Boolean).join(' ');
   $('#bRoad').textContent = s.maneuver.type==='arrive' ? dest.name : (road ? road+' 方面' : '');
   // 残りメーター（300m以内で減っていく）
@@ -922,7 +1115,7 @@ function updateNav(){
   $('#roadNow').textContent = curName; $('#roadNow').classList.toggle('hide', !curName);
 
   // 音声
-  const text = instr(s);
+  const text = sigText + instr(s);
   if(dnext<=1200 && dnext>800 && speed>16 && !spoken.has(k+'a')){ spoken.add(k+'a'); speak(voiceDist(dnext)+'先、'+text); }
   else if(dnext<=550 && dnext>200 && !spoken.has(k+'b')){ spoken.add(k+'b'); speak('およそ'+voiceDist(dnext)+'先、'+text); }
   else if(dnext<=Math.max(60, speed*6) && !spoken.has(k+'c')){ spoken.add(k+'c'); spoken.add(k+'b');
@@ -934,7 +1127,9 @@ function updateNav(){
   $('#nTime').textContent = fmtDur(rs);
   $('#nEta').textContent = fmtClock(Date.now()+rs*1000);
 
+  renderHw(pr.along);
   camera(dnext);
+  checkHighway();
 }
 
 async function reroute(){
@@ -966,8 +1161,9 @@ function startNav(withSim){
 }
 function stopNav(){
   navigating = false; stopSim();
+  if(hwMode){ hwMode=false; hwVotes=0; document.body.classList.remove('hw'); $('#hwPanel').classList.add('hide'); }
   document.body.classList.remove('navi');
-  ['#guide','#navBar','#speedo','#recenter','#roadNow'].forEach(s=>$(s).classList.add('hide'));
+  ['#guide','#navBar','#speedo','#recenter','#roadNow','#sigChip'].forEach(s=>$(s).classList.add('hide'));
   $('#searchBox').classList.remove('hide');
   if(wakeLock){ wakeLock.release().catch(()=>{}); wakeLock=null; }
   map.easeTo({pitch:0, bearing:0, padding:{top:0,bottom:0,left:0,right:0}, duration:800});
