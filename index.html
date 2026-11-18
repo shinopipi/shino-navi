@@ -266,7 +266,7 @@ body.hw #speedo,body.hw #roadNow{display:none!important}
 'use strict';
 const $ = s => document.querySelector(s);
 /* ---- いつも最新版で動かす（Safariが古いページを覚えていたら読み込み直す） ---- */
-const APP_VERSION = '2026-11-19f';
+const APP_VERSION = '2026-11-19g';
 (async()=>{ try{
   const r = await fetch(location.pathname+'?nocache='+Date.now(), {cache:'no-store'});
   const m = (await r.text()).match(/APP_VERSION = '([^']+)'/);
@@ -1378,12 +1378,17 @@ new MutationObserver(()=>document.body.classList.toggle('panelopen', !$('#panel'
 // 画面の大きさが変わったら地図を描き直す（Safariのアドレスバーの伸び縮み・回転）
 const fitMap = ()=>{
   try{
-    if(navigator.standalone){                 // ホーム画面から開いた時：画面の下まで地図を伸ばす
-      const land = window.matchMedia('(orientation: landscape)').matches;
-      const full = land ? Math.min(screen.width,screen.height) : Math.max(screen.width,screen.height);
-      const top = $('#map').getBoundingClientRect().top;
-      $('#map').style.height = Math.max(window.innerHeight, full - Math.max(0,top)) + 'px';
-    }
+    // ホーム画面から開いた時、iPhoneが画面の高さを短く伝えてくることがある（下に黒い帯）。
+    // その時は画面全体（下のバーやボタンも含めて）を本当の画面の高さに合わせる
+    const land = window.matchMedia('(orientation: landscape)').matches;
+    const full = land ? Math.min(screen.width,screen.height) : Math.max(screen.width,screen.height);
+    const gap = full - window.innerHeight;
+    const B = document.body, H = document.documentElement;
+    if(navigator.standalone && gap > 8 && gap < 120){
+      H.style.height = B.style.height = full+'px';
+      B.style.transform = 'translateZ(0)';            // 画面に固定する部品の基準を、伸ばした body にする
+      $('#map').style.height = '100%';
+    } else { H.style.height = B.style.height = ''; B.style.transform = ''; $('#map').style.height = ''; }
     map && map.resize(); jvMap && jvMap.resize();
   }catch(e){} };
 setTimeout(fitMap, 500);
@@ -1909,7 +1914,7 @@ async function checkBetterRoute(){
 /* ---- 設定（TomTomのキー） ---- */
 function openSettings(){
   $('#ttKeyIn').value = ttKey(); $('#ttFlowIn').checked = ttFlowOn(); $('#carIn').value = carClass();
-  $('#verNote').textContent = 'しのナビ 版：'+APP_VERSION + '　地図：'+(mapSrc==='tomtom'?'TomTom':'OpenStreetMap') + (RT ? '　ルート：'+(RT.engine==='tomtom'?(RT.src==='orbis'?'TomTom（地図と同じデータ）'+(RT.noGuide?'・案内なし':''):(RT.aligned&&RT._aligned!==false?'旧TomTom→地図に重ね済み':'旧TomTom')):RT.engine) : '');
+  $('#verNote').textContent = 'しのナビ 版：'+APP_VERSION + '　画面 '+innerWidth+'×'+innerHeight+' / '+screen.width+'×'+screen.height+(navigator.standalone?' ホーム':'') + '　地図：'+(mapSrc==='tomtom'?'TomTom':'OpenStreetMap') + (RT ? '　ルート：'+(RT.engine==='tomtom'?(RT.src==='orbis'?'TomTom（地図と同じデータ）'+(RT.noGuide?'・案内なし':''):(RT.aligned&&RT._aligned!==false?'旧TomTom→地図に重ね済み':'旧TomTom')):RT.engine) : '');
   $('#settings').classList.remove('hide');
 }
 $('#btnSettings').onclick = openSettings;
