@@ -17,7 +17,7 @@ body.night{--card:#202124;--card2:#303134;--line:#3c4043;--txt:#e8eaed;--sub:#9a
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none}
 html,body{margin:0;height:100%;background:#f4f3f0;color:var(--txt);font-family:Roboto,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;overflow:hidden}
 body.night{background:#1b2330}
-#map{position:fixed;inset:0}
+#map{position:fixed;left:0;top:0;right:0;bottom:0;height:100%;height:100dvh}
 body.ttmap.night #map .maplibregl-canvas{filter:invert(.9) hue-rotate(180deg) saturate(.85) brightness(.95)}
 body.raster.night .maplibregl-canvas{filter:invert(.92) hue-rotate(180deg) saturate(.8) brightness(.9)}
 button{font:inherit;color:inherit;border:0;cursor:pointer;background:none}
@@ -131,7 +131,11 @@ body.night .rb.ok{background:#173d24;color:#81c995}body.night .rb.toll{backgroun
 .setBox .chk{display:flex;gap:8px;align-items:center;color:var(--txt);font-size:14px;margin:10px 0 14px}
 
 /* ===== 右のボタン（白い丸） ===== */
-#fab{position:fixed;right:calc(12px + var(--sr));bottom:calc(210px + var(--sb));z-index:20;display:flex;flex-direction:column;gap:10px}
+#fab{position:fixed;right:calc(12px + var(--sr));bottom:calc(28px + var(--sb));z-index:20;display:flex;flex-direction:column;gap:10px}
+#fabMore{display:none;flex-direction:column;gap:10px}
+#fab.open #fabMore{display:flex}
+#fab.open #btnMoreFab{background:var(--acc);color:#fff}
+body.panelopen #fab{bottom:calc(min(55vh,470px) + 12px + var(--sb))}
 body.navi #fab{bottom:calc(96px + var(--sb))}
 .fab{width:50px;height:50px;border-radius:50%;background:var(--card);color:var(--sub);box-shadow:var(--shadow);font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center}
 .fab svg{width:24px;height:24px;fill:var(--acc)}
@@ -208,10 +212,13 @@ body.hw #speedo,body.hw #roadNow{display:none!important}
 </div>
 
 <div id="fab">
-  <button class="fab" id="btnMusic" title="ミュージック" style="font-size:22px;color:#fa233b">♪</button>
-  <button class="fab" id="btnPhoto" title="航空写真3D" style="font-size:20px">🛰️</button>
-  <button class="fab" id="btnSettings" title="設定" style="font-size:20px">⚙️</button>
-  <button class="fab" id="btnRules" title="交通規制" style="font-size:20px">⛔</button>
+  <div id="fabMore">
+    <button class="fab" id="btnMusic" title="ミュージック" style="font-size:22px;color:#fa233b">♪</button>
+    <button class="fab" id="btnPhoto" title="航空写真3D" style="font-size:20px">🛰️</button>
+    <button class="fab" id="btnSettings" title="設定" style="font-size:20px">⚙️</button>
+    <button class="fab" id="btnRules" title="交通規制" style="font-size:20px">⛔</button>
+  </div>
+  <button class="fab" id="btnMoreFab" title="その他" style="font-size:22px">⋯</button>
   <button class="fab" id="btnView" title="地図の向き">3D</button>
   <button class="fab" id="btnNight" title="昼夜">🌙</button>
   <button class="fab" id="btnVoice" title="音声">🔊</button>
@@ -262,7 +269,7 @@ body.hw #speedo,body.hw #roadNow{display:none!important}
 'use strict';
 const $ = s => document.querySelector(s);
 /* ---- いつも最新版で動かす（Safariが古いページを覚えていたら読み込み直す） ---- */
-const APP_VERSION = '2026-11-19c';
+const APP_VERSION = '2026-11-19d';
 (async()=>{ try{
   const r = await fetch(location.pathname+'?nocache='+Date.now(), {cache:'no-store'});
   const m = (await r.text()).match(/APP_VERSION = '([^']+)'/);
@@ -1365,6 +1372,17 @@ function estimateToll(R){
   return total ? {yen:total, parts} : null;
 }
 function tollText(t){ return t ? 'ETC 約'+t.yen.toLocaleString()+'円' : ''; }
+
+/* ---- 右のボタン：「⋯」で残りを開閉 ---- */
+$('#btnMoreFab').onclick = ()=>$('#fab').classList.toggle('open');
+['btnMusic','btnPhoto','btnSettings','btnRules'].forEach(id=>document.getElementById(id).addEventListener('click',()=>setTimeout(()=>$('#fab').classList.remove('open'),300)));
+// ルート確認パネルが出ている時はボタンをその上に
+new MutationObserver(()=>document.body.classList.toggle('panelopen', !$('#panel').classList.contains('hide'))).observe($('#panel'), {attributes:true, attributeFilter:['class']});
+// 画面の大きさが変わったら地図を描き直す（Safariのアドレスバーの伸び縮み・回転）
+const fitMap = ()=>{ try{ map && map.resize(); jvMap && jvMap.resize(); }catch(e){} };
+window.addEventListener('resize', fitMap); window.addEventListener('orientationchange', ()=>setTimeout(fitMap,300));
+if(window.visualViewport) visualViewport.addEventListener('resize', fitMap);
+if(window.ResizeObserver) new ResizeObserver(fitMap).observe($('#map'));
 
 /* ================= Apple Music を開く =================
    ブラウザからは他のアプリの再生操作やアルバム写真の取得ができないため、
