@@ -262,7 +262,7 @@ body.hw #speedo,body.hw #roadNow{display:none!important}
 'use strict';
 const $ = s => document.querySelector(s);
 /* ---- いつも最新版で動かす（Safariが古いページを覚えていたら読み込み直す） ---- */
-const APP_VERSION = '2026-11-19b';
+const APP_VERSION = '2026-11-19c';
 (async()=>{ try{
   const r = await fetch(location.pathname+'?nocache='+Date.now(), {cache:'no-store'});
   const m = (await r.text()).match(/APP_VERSION = '([^']+)'/);
@@ -1613,24 +1613,26 @@ async function routesTomTom(from, to, key){
   const loc = `${from.lat},${from.lng}:${to.lat},${to.lng}`, k = encodeURIComponent(key);
   const q = '&traffic=true&departAt=now&routeType=fastest&travelMode=car&maxAlternatives=4&computeTravelTimeFor=all'
     + '&sectionType=traffic&sectionType=lanes&sectionType=tollRoad&sectionType=motorway&instructionsType=tagged&language=ja-JP&routeRepresentation=polyline';
-  // 新しい Orbis（apiVersion=2）→ だめなら従来の Routing v1
-  const urls = [`https://api.tomtom.com/maps/orbis/routing/calculateRoute/${loc}/json?apiVersion=2&key=${k}${q}`,
-                `https://api.tomtom.com/maps/orbis/routing/calculateRoute/${loc}/json?apiVersion=2&key=${k}&traffic=true&departAt=now&maxAlternatives=4&sectionType=traffic&instructionsType=text&language=ja-JP`,
+  // 新しい Orbis（apiVersion=2）：地図と同じデータ。traffic は live、案内(instructionsType)・言語は指定できない
+  // → だめなら従来の Routing v1（地図と少しずれるので後で地図に重ね直す）
+  const oq = '&traffic=live&departAt=now&travelMode=car&maxAlternatives=4&sectionType=traffic';
+  const urls = [`https://api.tomtom.com/maps/orbis/routing/calculateRoute/${loc}/json?apiVersion=2&key=${k}${oq}&sectionType=motorway`,
+                `https://api.tomtom.com/maps/orbis/routing/calculateRoute/${loc}/json?apiVersion=2&key=${k}${oq}`,
                 `https://api.tomtom.com/routing/1/calculateRoute/${loc}/json?key=${k}${q}`];
-  let j = null, authErr = false, lastErr = '';
+  let j = null, authErr = false, lastErr = '', src = '';
   for(const url of urls){
     try{
       const ctl = new AbortController(); const tm = setTimeout(()=>ctl.abort(), 12000);
       const r = await fetch(url, {signal:ctl.signal}); clearTimeout(tm);
       if(r.status===401 || r.status===403){ authErr = true; continue; }
       const jj = await r.json();
-      if(jj.routes && jj.routes.length){ j = jj; break; }
+      if(jj.routes && jj.routes.length){ j = jj; src = url.includes('/maps/orbis/') ? 'orbis' : 'genesis'; break; }
       lastErr = (jj.detailedError&&jj.detailedError.message) || (jj.error&&jj.error.description) || ('エラー '+r.status);
     }catch(e){ lastErr = e.message; }
   }
   if(!j) throw new Error(authErr ? 'APIキーが使えません（キー、またはRouting APIの許可を確認）' : lastErr || 'ルートなし');
-  return j.routes.map(rt=>{
-    const coords = rt.legs.flatMap(l=>l.points).map(p=>({lat:p.latitude, lng:p.longitude}));
+  const list = j.routes.map(rt=>{
+    const coords = rt.legs.flatMap(l=>l.points||[]).map(p=>({lat:p.latitude, lng:p.longitude}));
     const ins = (rt.guidance && rt.guidance.instructions) || [];
     const steps = ins.map(x=>{
       const t = TT_MAN[x.maneuver] || ['continue','straight'];
@@ -1638,6 +1640,7 @@ async function routesTomTom(from, to, key){
         name:x.street||'', ref:(x.roadNumbers||[])[0]||'', destinations:x.signpostText||'', _idx:x.pointIndex, intersections:[]};
     });
     if(!steps.length || steps[0].maneuver.type!=='depart') steps.unshift({maneuver:{type:'depart',modifier:'straight',location:[coords[0].lng,coords[0].lat]},name:'',_idx:0,intersections:[]});
+    if(steps[steps.length-1].maneuver.type!=='arrive'){ const e=coords[coords.length-1]; steps.push({maneuver:{type:'arrive',modifier:'straight',location:[e.lng,e.lat]},name:'',_idx:coords.length-1,intersections:[]}); }
     const secs = rt.sections||[];
     // 車線：車線区間の終わりにある案内に付ける
     secs.filter(s=>s.sectionType==='LANES' && s.lanes).forEach(s=>{
@@ -1652,9 +1655,12 @@ async function routesTomTom(from, to, key){
     R._mw = secs.filter(s=>s.sectionType==='MOTORWAY').map(s=>[R.cum[s.startPointIndex], R.cum[Math.min(s.endPointIndex,R.cum.length-1)]]);
     R.traffic = secs.filter(s=>s.sectionType==='TRAFFIC').map(s=>({i0:s.startPointIndex, i1:s.endPointIndex, mag:s.magnitudeOfDelay??1,
       cat:s.simpleCategory||'', delay:s.delayInSeconds||0, kmh:s.effectiveSpeedInKmh}));
-    R.via = viaNames(R);
+    R.via = viaNames(R); R.src = src;
     return R;
   });
+  // Orbis は曲がる場所の案内を返さないので、Valhalla で案内だけ作る（線は TomTom のまま）
+  if(src==='orbis') await Promise.all(list.map(addGuidance));
+  return list;
 }
 async function routesValhalla(from, to){
   const req = {locations:[{lat:from.lat,lon:from.lng},{lat:to.lat,lon:to.lng}], costing:'auto', units:'kilometers',
@@ -1721,7 +1727,7 @@ function enc6(pts){ let out='', pl=0, pg=0;
   return out; }
 function nearestIdx(R, p, from=0){ let bi=from, bd=Infinity; for(let i=from;i<R.coords.length;i++){ const d=dist(R.coords[i],p); if(d<bd){bd=d;bi=i;} } return bi; }
 async function alignRoute(R){
-  if(mapSrc==='tomtom') return R;   // 地図もTomTomなので重ね直さない
+  if(R.src==='orbis') return R;   // 地図と同じデータなので重ね直さない
   if(!R || R.aligned || R.engine!=='tomtom' || R.distance>250000) return R;
   // 30mおき程度に間引いて送る
   const pts=[]; let last=null;
@@ -1753,6 +1759,39 @@ async function alignRoute(R){
     N.aligned = true;
     return N;
   }catch(e){ R.aligned = true; R._aligned = false; console.warn('align failed', e); toast('ルートを地図の道路に重ねられませんでした（'+((e&&e.message)||'通信')+'）。少しずれて見える場合があります', 4000); return R; }   // 失敗したら元の線のまま
+}
+
+/* Orbis のルート線から、曲がる場所の案内（右折・左折・道の名前・有料区間）を作る */
+async function addGuidance(R){
+  const pts=[]; let last=null;
+  R.coords.forEach((c,i)=>{ if(!last || dist(last,c)>30 || i===R.coords.length-1){ pts.push(c); last=c; } });
+  const req = {encoded_polyline:enc6(pts), shape_match:'map_snap', costing:'auto',
+    trace_options:{search_radius:40, gps_accuracy:10}, directions_options:{units:'kilometers', language:'ja-JP'}};
+  const body = JSON.stringify(req); let j = null;
+  try{
+    const ctl=new AbortController(); const tm=setTimeout(()=>ctl.abort(), 15000);
+    const r = await fetch('https://valhalla1.openstreetmap.de/trace_route', {method:'POST', body, signal:ctl.signal, headers:{'Content-Type':'text/plain'}});
+    clearTimeout(tm); j = await r.json();
+  }catch(e){
+    try{ if(body.length<7000){ const r = await fetch('https://valhalla1.openstreetmap.de/trace_route?json='+encodeURIComponent(body)); j = await r.json(); } }catch(e2){}
+  }
+  if(!j || !j.trip || !j.trip.legs){ R.noGuide = true; return; }
+  const steps=[]; const nL=j.trip.legs.length;
+  j.trip.legs.forEach((leg,li)=>{
+    const shp = decode6(leg.shape);
+    leg.maneuvers.forEach(m=>{
+      const t = VT[m.type] || ['continue','straight'];
+      if(t[0]==='depart' && (li>0 || steps.length)) return;          // 途中の区切りは飛ばす
+      if(t[0]==='arrive' && li<nL-1) return;
+      const c = shp[Math.min(m.begin_shape_index, shp.length-1)];
+      const dst = m.sign ? [...(m.sign.exit_toward_elements||[]), ...(m.sign.exit_branch_elements||[])].map(e=>e.text).join(', ') : '';
+      steps.push({maneuver:{type:t[0], modifier:t[1], location:[c.lng,c.lat], exit:m.roundabout_exit_count},
+        name:(m.street_names||[])[0]||'', ref:'', destinations:dst, intersections: m.toll ? [{classes:['toll']}] : []});
+    });
+  });
+  if(steps.length<2) { R.noGuide = true; return; }
+  const N = buildRT(R.coords, steps, R.duration, 'tomtom');
+  R.steps = N.steps; R.via = viaNames(R);
 }
 
 /* ---- 地図への描画：他の候補（灰色）と渋滞区間（黄・オレンジ・赤） ---- */
@@ -1855,7 +1894,7 @@ async function checkBetterRoute(){
 /* ---- 設定（TomTomのキー） ---- */
 function openSettings(){
   $('#ttKeyIn').value = ttKey(); $('#ttFlowIn').checked = ttFlowOn(); $('#carIn').value = carClass();
-  $('#verNote').textContent = 'しのナビ 版：'+APP_VERSION + '　地図：'+(mapSrc==='tomtom'?'TomTom':'OpenStreetMap') + (RT ? '　ルート：'+(RT.engine==='tomtom'?(RT.aligned&&RT._aligned!==false?'TomTom→地図に重ね済み':'TomTom'):RT.engine) : '');
+  $('#verNote').textContent = 'しのナビ 版：'+APP_VERSION + '　地図：'+(mapSrc==='tomtom'?'TomTom':'OpenStreetMap') + (RT ? '　ルート：'+(RT.engine==='tomtom'?(RT.src==='orbis'?'TomTom（地図と同じデータ）'+(RT.noGuide?'・案内なし':''):(RT.aligned&&RT._aligned!==false?'旧TomTom→地図に重ね済み':'旧TomTom')):RT.engine) : '');
   $('#settings').classList.remove('hide');
 }
 $('#btnSettings').onclick = openSettings;
