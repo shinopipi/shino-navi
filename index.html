@@ -15,8 +15,8 @@
   --st:env(safe-area-inset-top,0px);--sb:env(safe-area-inset-bottom,0px);--sl:env(safe-area-inset-left,0px);--sr:env(safe-area-inset-right,0px)}
 body.night{--card:#202124;--card2:#303134;--line:#3c4043;--txt:#e8eaed;--sub:#9aa0a6;--acc:#8ab4f8;--eta:#81c995;--ban:#0d652d;--ban2:#0a4f23;--shadow:0 2px 10px #000a}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none}
-html,body{margin:0;height:100%;background:#f5f3f0;color:var(--txt);font-family:Roboto,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;overflow:hidden}
-body.night{background:#242f3e}
+html,body{margin:0;height:100%;background:#f4f3f0;color:var(--txt);font-family:Roboto,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;overflow:hidden}
+body.night{background:#1b2330}
 #map{position:fixed;inset:0}
 body.raster.night .maplibregl-canvas{filter:invert(.92) hue-rotate(180deg) saturate(.8) brightness(.9)}
 button{font:inherit;color:inherit;border:0;cursor:pointer;background:none}
@@ -276,9 +276,10 @@ async function initMap(){
   try{ const r = await fetch(STYLE_URL); if(!r.ok) throw 0; style = patchStyle(await r.json()); }
   catch(e){ style = RASTER_STYLE; document.body.classList.add('raster'); }
   map = new maplibregl.Map({container:'map', style, center:[139.9254,35.8717], zoom:15, maxPitch:70,
+    localIdeographFontFamily:'"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP","Yu Gothic",sans-serif',
     attributionControl:{compact:true, customAttribution:'ルート: OSRM / © OpenStreetMap'}});
   map.on('load', ()=>{
-    add3DBuildings(); addRouteLayers(); mapReady = true; addRuleLayers(); applyTheme();
+    declutter(); add3DBuildings(); addRouteLayers(); mapReady = true; addRuleLayers(); applyTheme();
     if(RT) drawRoute();
   });
   const userMove = e => { if(navigating && e.originalEvent){ follow=false; $('#recenter').classList.remove('hide'); } };
@@ -294,20 +295,26 @@ async function initMap(){
 
 /* ================= Googleマップ風の配色 ================= */
 const THEMES = {
-  day:{bg:'#f5f3f0', water:'#aadaff', park:'#c3ecb2', wood:'#d4ecc8',
-    land:{hospital:'#fde7e4', school:'#eceef8', shop:'#f7efe5', ind:'#efedf0', res:'#f2efea'},
-    bld:'#e8e5e0', bld3d:'#e3e0db', road:'#ffffff', roadCase:'#dad7d2', trunk:'#fde293', trunkCase:'#ecc56c',
-    mw:'#f8c967', mwCase:'#e0a53b', rail:'#c4c4c4', bnd:'#b9b0bb',
-    txt:'#5f6368', txtPlace:'#3c4043', txtWater:'#3b82c4', halo:'#ffffff',
+  // 昼：明るくフラットな配色（住宅地は地面と同じ色にして、すっきり）
+  day:{bg:'#f4f3f0', water:'#9ccff3', park:'#c9ebcb', wood:'#d3eccd',
+    land:{hospital:'#fbe8e6', school:'#eef0f8', shop:'#f6f0e9', ind:'#eeedf1', res:'#f4f3f0'},
+    bld:'#e6e4e0', bld3d:'#efeeeb', road:'#ffffff', roadCase:'#e0ded9', trunk:'#ffe7a3', trunkCase:'#f0cf79',
+    mw:'#ffd27a', mwCase:'#e9b04c', rail:'#cfd2d6', bnd:'#c9c1cb',
+    txt:'#5b6068', txtPlace:'#2f3337', txtWater:'#3a7fc0', halo:'#ffffff',
     poi:{food:'#e8710a', shop:'#1a73e8', park:'#188038', med:'#d93025', transit:'#1967d2', def:'#70757a'},
-    route:'#1a73e8', routeCase:'#1557b0', done:'#a8adb3'},
-  night:{bg:'#242f3e', water:'#17263c', park:'#263c3f', wood:'#25363a',
-    land:{hospital:'#2e3443', school:'#283244', shop:'#2a3443', ind:'#283140', res:'#263142'},
-    bld:'#2b3646', bld3d:'#334052', road:'#38414e', roadCase:'#212a37', trunk:'#5b5f66', trunkCase:'#2a2f38',
-    mw:'#746855', mwCase:'#1f2835', rail:'#3a4352', bnd:'#4b6878',
-    txt:'#9ca5b3', txtPlace:'#d59563', txtWater:'#515c6d', halo:'#17263c',
-    poi:{food:'#d59563', shop:'#8ab4f8', park:'#6b9a76', med:'#f28b82', transit:'#8ab4f8', def:'#9ca5b3'},
-    route:'#4c8bf5', routeCase:'#1a4d9e', done:'#5f6368'}
+    route:'#1a73e8', routeCase:'#ffffff', routeShadow:'#0b3d91', done:'#b9bec6',
+    sky:{'sky-color':'#bcd9f5','horizon-color':'#eaf2fa','fog-color':'#f4f3f0','sky-horizon-blend':.7,'horizon-fog-blend':.8,'fog-ground-blend':.85,'atmosphere-blend':0},
+    light:{color:'#ffffff', intensity:.25}, bldOpacity:.8},
+  // 夜：濃紺ベース
+  night:{bg:'#1b2330', water:'#0f2236', park:'#1e3430', wood:'#1d3130',
+    land:{hospital:'#2a2b38', school:'#232c3c', shop:'#252d3a', ind:'#222a37', res:'#1b2330'},
+    bld:'#252e3c', bld3d:'#2e3848', road:'#3b4555', roadCase:'#1b2330', trunk:'#5a574d', trunkCase:'#1b2330',
+    mw:'#82704b', mwCase:'#1b2330', rail:'#384252', bnd:'#4b6878',
+    txt:'#a7b0bd', txtPlace:'#e2c597', txtWater:'#5f7fa3', halo:'#1b2330',
+    poi:{food:'#f0a868', shop:'#8ab4f8', park:'#7fb48b', med:'#f28b82', transit:'#8ab4f8', def:'#a7b0bd'},
+    route:'#5a9bff', routeCase:'#0d2a55', routeShadow:'#000000', done:'#4c5563',
+    sky:{'sky-color':'#0b1320','horizon-color':'#1d2838','fog-color':'#1b2330','sky-horizon-blend':.7,'horizon-fog-blend':.8,'fog-ground-blend':.85,'atmosphere-blend':0},
+    light:{color:'#aab8d0', intensity:.2}, bldOpacity:.85}
 };
 function themePaint(l, P){
   const sl = l['source-layer']||'', id = l.id, t = l.type, pt = l.paint||{}, p = {};
@@ -326,7 +333,7 @@ function themePaint(l, P){
     else if(sl==='aeroway') p['fill-color'] = P.land.ind;
     else if(sl==='transportation') p['fill-color'] = P.road;
   }
-  else if(t==='fill-extrusion'){ p['fill-extrusion-color'] = P.bld3d; p['fill-extrusion-opacity'] = .9; }
+  else if(t==='fill-extrusion'){ p['fill-extrusion-color'] = P.bld3d; p['fill-extrusion-opacity'] = P.bldOpacity; p['fill-extrusion-vertical-gradient'] = true; }
   else if(t==='line'){
     if(pt['line-pattern']) return p;
     if(sl==='waterway') p['line-color'] = P.water;
@@ -338,7 +345,7 @@ function themePaint(l, P){
     }
   }
   else if(t==='symbol' && l.layout && l.layout['text-field']){
-    p['text-halo-color'] = P.halo; p['text-halo-width'] = 1.6;
+    p['text-halo-color'] = P.halo; p['text-halo-width'] = 1.4; p['text-halo-blur'] = .5;
     if(sl==='place') p['text-color'] = P.txtPlace;
     else if(sl==='water_name' || sl==='waterway') p['text-color'] = P.txtWater;
     else if(sl==='poi') p['text-color'] = ['match',cls,
@@ -361,9 +368,30 @@ function applyTheme(){
       for(const k in p){ try{ map.setPaintProperty(l.id,k,p[k]); }catch(e){} }
     });
   }
+  try{ map.setSky(P.sky); }catch(e){}
+  try{ map.setLight({anchor:'map', position:[1.3,200,40], color:P.light.color, intensity:P.light.intensity}); }catch(e){}
+  map.setPaintProperty('route-shadow','line-color',P.routeShadow);
   map.setPaintProperty('route-line','line-color',P.route);
   map.setPaintProperty('route-casing','line-color',P.routeCase);
   map.setPaintProperty('done-line','line-color',P.done);
+}
+
+/* ごちゃごちゃした表示を減らす（今どきの地図らしく） */
+function declutter(){
+  if(document.body.classList.contains('raster')) return;
+  map.getStyle().layers.forEach(l=>{
+    const sl = l['source-layer']||'', id = l.id;
+    const hide = ()=>{ try{ map.setLayoutProperty(id,'visibility','none'); }catch(e){} };
+    // 模様の塗り（湿地・砂地など）、陰影、番地、建物の輪郭線
+    if((l.paint && (l.paint['fill-pattern'] || l.paint['line-pattern'])) || l.type==='hillshade' || sl==='housenumber') return hide();
+    if(sl==='building' && l.type==='line') return hide();
+    if(sl==='boundary' && /admin_(sub|level_[6-9]|10)/.test(id)) return hide();
+    // お店などのアイコンは、かなり近づいた時だけ（駅は残す）
+    if(sl==='poi' && l.type==='symbol' && !/transit|rail|station/.test(id)){
+      try{ map.setLayerZoomRange(id, Math.max(l.minzoom||0, 16.5), 24); }catch(e){}
+      try{ map.setLayoutProperty(id,'text-size',['interpolate',['linear'],['zoom'],16,10.5,19,13]); }catch(e){}
+    }
+  });
 }
 
 function firstSymbolId(){ const l = map.getStyle().layers.find(l=>l.type==='symbol'); return l && l.id; }
@@ -387,8 +415,10 @@ function addRouteLayers(){
   const w = (a,b,c) => ['interpolate',['linear'],['zoom'],10,a,15,b,18,c];
   map.addLayer({id:'done-line', type:'line', source:'done', layout:{'line-join':'round','line-cap':'round'},
     paint:{'line-color':'#9aa3ad','line-width':w(4,8,18),'line-opacity':.8}}, before);
+  map.addLayer({id:'route-shadow', type:'line', source:'route', layout:{'line-join':'round','line-cap':'round'},
+    paint:{'line-color':'#0b3d91','line-width':w(10,18,36),'line-blur':w(3,6,10),'line-opacity':.25}}, before);
   map.addLayer({id:'route-casing', type:'line', source:'route', layout:{'line-join':'round','line-cap':'round'},
-    paint:{'line-color':'#0a3f73','line-width':w(7,13,28)}}, before);
+    paint:{'line-color':'#ffffff','line-width':w(7,13,28)}}, before);
   map.addLayer({id:'route-line', type:'line', source:'route', layout:{'line-join':'round','line-cap':'round'},
     paint:{'line-color':'#3aa8ff','line-width':w(4,9,20)}}, before);
 }
@@ -402,8 +432,10 @@ function drawRoute(doneCoords, restCoords){
 /* 自車マーク */
 function makeCar(){
   const el = document.createElement('div');
-  el.innerHTML = '<svg class="car" viewBox="0 0 52 52"><circle cx="26" cy="26" r="24" fill="#1a73e8" fill-opacity=".18"/>'
-    + '<path d="M26 5 L41 41 L26 33 L11 41 Z" fill="#1a73e8" stroke="#fff" stroke-width="3.5" stroke-linejoin="round"/></svg>';
+  el.innerHTML = '<svg class="car" viewBox="0 0 52 52"><defs><radialGradient id="cg" cx="50%" cy="40%" r="60%"><stop offset="0" stop-color="#4b93ff"/><stop offset="1" stop-color="#1663d6"/></radialGradient></defs>'
+    + '<circle cx="26" cy="26" r="23" fill="#1a73e8" fill-opacity=".15"/>'
+    + '<circle cx="26" cy="26" r="17" fill="#fff"/>'
+    + '<path d="M26 12 L36 36 L26 30.5 L16 36 Z" fill="url(#cg)" stroke="#1257c0" stroke-width="1" stroke-linejoin="round"/></svg>';
   return new maplibregl.Marker({element:el, rotationAlignment:'map', pitchAlignment:'map'});
 }
 
