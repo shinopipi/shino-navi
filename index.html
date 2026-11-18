@@ -18,6 +18,7 @@ body.night{--card:#202124;--card2:#303134;--line:#3c4043;--txt:#e8eaed;--sub:#9a
 html,body{margin:0;height:100%;background:#f4f3f0;color:var(--txt);font-family:Roboto,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;overflow:hidden}
 body.night{background:#1b2330}
 #map{position:fixed;inset:0}
+body.ttmap.night #map .maplibregl-canvas{filter:invert(.9) hue-rotate(180deg) saturate(.85) brightness(.95)}
 body.raster.night .maplibregl-canvas{filter:invert(.92) hue-rotate(180deg) saturate(.8) brightness(.9)}
 button{font:inherit;color:inherit;border:0;cursor:pointer;background:none}
 input{-webkit-user-select:text;user-select:text}
@@ -261,7 +262,7 @@ body.hw #speedo,body.hw #roadNow{display:none!important}
 'use strict';
 const $ = s => document.querySelector(s);
 /* ---- いつも最新版で動かす（Safariが古いページを覚えていたら読み込み直す） ---- */
-const APP_VERSION = '2026-11-19a';
+const APP_VERSION = '2026-11-19b';
 (async()=>{ try{
   const r = await fetch(location.pathname+'?nocache='+Date.now(), {cache:'no-store'});
   const m = (await r.text()).match(/APP_VERSION = '([^']+)'/);
@@ -347,15 +348,42 @@ async function lockScreen(){ try{ if('wakeLock' in navigator) wakeLock = await n
 document.addEventListener('visibilitychange', ()=>{ if(navigating && document.visibilityState==='visible') lockScreen(); });
 
 /* ================= 地図の準備 ================= */
+/* TomTom の地図：ルート・渋滞と同じデータなので、線と道路がずれない */
+let mapSrc = 'osm';
+function ttTransform(url){
+  const key = ttKey();
+  if(key && url.startsWith('https://api.tomtom.com')){
+    if(!/[?&]key=/.test(url)) url += (url.includes('?')?'&':'?')+'key='+encodeURIComponent(key);
+    if(url.includes('/maps/orbis/') && !/[?&]apiVersion=/.test(url)) url += '&apiVersion=1';
+  }
+  return {url};
+}
+async function loadTomTomStyle(){
+  const key = ttKey(); if(!key) return null;
+  const k = encodeURIComponent(key);
+  const urls = [
+    `https://api.tomtom.com/maps/orbis/assets/styles/0.*/style.json?key=${k}&apiVersion=1&map=basic_street-light&trafficFlow=flow_relative-light`,
+    `https://api.tomtom.com/maps/orbis/assets/styles/0.*/style.json?key=${k}&apiVersion=1&map=basic_street-light`,
+    `https://api.tomtom.com/map/1/style/22.*/2/basic_street-light.json?key=${k}`];
+  for(const u of urls){
+    try{ const r = await fetch(u); if(!r.ok) continue; const st = await r.json(); if(st && st.layers && st.sources) return st; }catch(e){}
+  }
+  return null;
+}
 async function initMap(){
-  let style;
-  try{ const r = await fetch(STYLE_URL); if(!r.ok) throw 0; style = patchStyle(await r.json()); styleBase = structuredClone(style); }
-  catch(e){ style = RASTER_STYLE; document.body.classList.add('raster'); }
+  let style = await loadTomTomStyle();
+  if(style){ mapSrc = 'tomtom'; styleBase = structuredClone(style); document.body.classList.add('ttmap'); }
+  else{
+    try{ const r = await fetch(STYLE_URL); if(!r.ok) throw 0; style = patchStyle(await r.json()); styleBase = structuredClone(style); }
+    catch(e){ style = RASTER_STYLE; document.body.classList.add('raster'); }
+  }
   map = new maplibregl.Map({container:'map', style, center:[139.9254,35.8717], zoom:15, maxPitch:70,
+    transformRequest: ttTransform,
     localIdeographFontFamily:'"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP","Yu Gothic",sans-serif',
-    attributionControl:{compact:true, customAttribution:'ルート: OSRM / © OpenStreetMap'}});
+    attributionControl:{compact:true, customAttribution: mapSrc==='tomtom' ? '地図・ルート・渋滞 © TomTom' : 'ルート: OSRM / © OpenStreetMap'}});
   map.on('load', ()=>{
-    declutter(); add3DBuildings(); addRouteLayers(); addTrafficLayers(); mapReady = true; addRuleLayers(); addIncidentLayers(); applyTheme(); addPhotoLayers();
+    if(mapSrc!=='tomtom'){ declutter(); add3DBuildings(); }
+    addRouteLayers(); addTrafficLayers(); mapReady = true; addRuleLayers(); addIncidentLayers(); applyTheme(); addPhotoLayers();
     if(RT) drawRoute();
   });
   const userMove = e => { if(navigating && e.originalEvent){ follow=false; $('#recenter').classList.remove('hide'); } };
@@ -436,8 +464,8 @@ function themePaint(l, P){
 }
 function applyTheme(){
   if(!mapReady) return;
-  const P = night ? THEMES.night : THEMES.day;
-  if(!document.body.classList.contains('raster')){
+  const P = (night && mapSrc!=='tomtom') ? THEMES.night : THEMES.day;
+  if(!document.body.classList.contains('raster') && mapSrc!=='tomtom'){
     map.getStyle().layers.forEach(l=>{
       if(/^(route|done|rule|alt|traffic|ttflow|photo|inc)/.test(l.id)) return;
       const p = themePaint(l,P);
@@ -868,7 +896,9 @@ const HW_LAYERS = ()=> hwLayerIds || (hwLayerIds = map.getStyle().layers.filter(
 function checkHighway(){
   if(!mapReady || !shown || !navigating) return;
   let onMw = false;
-  try{
+  if(RT && RT._mw && (RT._mw.length || mapSrc==='tomtom')){
+    const a = RT._curAlong||0; onMw = RT._mw.some(([s,e])=>a>=s && a<=e);
+  } else try{
     const pt = map.project([shown.lng, shown.lat]);
     const fs = map.queryRenderedFeatures([[pt.x-10,pt.y-10],[pt.x+10,pt.y+10]], {layers:HW_LAYERS()});
     onMw = fs.some(f=>f.properties.class==='motorway' && f.properties.ramp!==1);
@@ -1163,14 +1193,14 @@ function junctionName(s){
 function themeJV(){
   if(!jvReady) return;
   const P = THEMES.day;
-  jvMap.getStyle().layers.forEach(l=>{ if(/^jv/.test(l.id)) return; const p=themePaint(l,P); for(const k in p){ try{ jvMap.setPaintProperty(l.id,k,p[k]); }catch(e){} } });
+  if(mapSrc!=='tomtom') jvMap.getStyle().layers.forEach(l=>{ if(/^jv/.test(l.id)) return; const p=themePaint(l,P); for(const k in p){ try{ jvMap.setPaintProperty(l.id,k,p[k]); }catch(e){} } });
   jvMap.getStyle().layers.forEach(l=>{ if(l.type==='fill-extrusion'){ try{ jvMap.setPaintProperty(l.id,'fill-extrusion-opacity',1); }catch(e){} } });
   try{ jvMap.setSky(P.sky); }catch(e){}
   try{ jvMap.setLight({anchor:'map', position:[1.3,210,35], color:'#ffffff', intensity:night?.25:.4}); }catch(e){}
 }
 function ensureJV(){
   if(jvMap || !styleBase) return;
-  jvMap = new maplibregl.Map({container:'jvMap', style:structuredClone(styleBase), interactive:false, attributionControl:false,
+  jvMap = new maplibregl.Map({container:'jvMap', style:structuredClone(styleBase), interactive:false, attributionControl:false, transformRequest: ttTransform,
     center:[139.9254,35.8717], zoom:18, pitch:72, maxPitch:85, fadeDuration:0,
     localIdeographFontFamily:'"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif'});
   jvMap.on('load', ()=>{
@@ -1582,7 +1612,7 @@ function viaNames(rt){                      // 主に通る道（距離の長い
 async function routesTomTom(from, to, key){
   const loc = `${from.lat},${from.lng}:${to.lat},${to.lng}`, k = encodeURIComponent(key);
   const q = '&traffic=true&departAt=now&routeType=fastest&travelMode=car&maxAlternatives=4&computeTravelTimeFor=all'
-    + '&sectionType=traffic&sectionType=lanes&sectionType=tollRoad&instructionsType=tagged&language=ja-JP&routeRepresentation=polyline';
+    + '&sectionType=traffic&sectionType=lanes&sectionType=tollRoad&sectionType=motorway&instructionsType=tagged&language=ja-JP&routeRepresentation=polyline';
   // 新しい Orbis（apiVersion=2）→ だめなら従来の Routing v1
   const urls = [`https://api.tomtom.com/maps/orbis/routing/calculateRoute/${loc}/json?apiVersion=2&key=${k}${q}`,
                 `https://api.tomtom.com/maps/orbis/routing/calculateRoute/${loc}/json?apiVersion=2&key=${k}&traffic=true&departAt=now&maxAlternatives=4&sectionType=traffic&instructionsType=text&language=ja-JP`,
@@ -1619,6 +1649,7 @@ async function routesTomTom(from, to, key){
     R.noTraffic = rt.summary.noTrafficTravelTimeInSeconds || rt.summary.travelTimeInSeconds;
     R.toll = secs.some(s=>s.sectionType==='TOLL_ROAD');
     R._tollSecs = secs.filter(s=>s.sectionType==='TOLL_ROAD').map(s=>[s.startPointIndex, s.endPointIndex]);
+    R._mw = secs.filter(s=>s.sectionType==='MOTORWAY').map(s=>[R.cum[s.startPointIndex], R.cum[Math.min(s.endPointIndex,R.cum.length-1)]]);
     R.traffic = secs.filter(s=>s.sectionType==='TRAFFIC').map(s=>({i0:s.startPointIndex, i1:s.endPointIndex, mag:s.magnitudeOfDelay??1,
       cat:s.simpleCategory||'', delay:s.delayInSeconds||0, kmh:s.effectiveSpeedInKmh}));
     R.via = viaNames(R);
@@ -1690,6 +1721,7 @@ function enc6(pts){ let out='', pl=0, pg=0;
   return out; }
 function nearestIdx(R, p, from=0){ let bi=from, bd=Infinity; for(let i=from;i<R.coords.length;i++){ const d=dist(R.coords[i],p); if(d<bd){bd=d;bi=i;} } return bi; }
 async function alignRoute(R){
+  if(mapSrc==='tomtom') return R;   // 地図もTomTomなので重ね直さない
   if(!R || R.aligned || R.engine!=='tomtom' || R.distance>250000) return R;
   // 30mおき程度に間引いて送る
   const pts=[]; let last=null;
@@ -1741,8 +1773,13 @@ function addTrafficLayers(){
 /* 地図全体の渋滞（TomTom 交通流タイル）：起動直後から表示し、1分ごとに最新に更新
    使えるアドレスを順に試す（Orbis v2 → Orbis v1 → 従来版） */
 let flowTpl = null;
+function styleFlowLayers(){ return map.getStyle().layers.filter(l=>/flow/i.test(l.id) || /flow/i.test(String(l.source||''))).map(l=>l.id).filter(id=>id!=='ttflow'); }
 async function setupFlow(){
   const key = ttKey(); if(!key) return;
+  if(mapSrc==='tomtom' && styleFlowLayers().length){
+    styleFlowLayers().forEach(id=>{ try{ map.setLayoutProperty(id,'visibility', ttFlowOn()?'visible':'none'); }catch(e){} });
+    return;
+  }
   const k = encodeURIComponent(key);
   const cands = [
     `https://api.tomtom.com/maps/orbis/traffic/flow/raster/tile/{z}/{x}/{y}?apiVersion=2&key=${k}&style=light&tileSize=256`,
@@ -1818,7 +1855,7 @@ async function checkBetterRoute(){
 /* ---- 設定（TomTomのキー） ---- */
 function openSettings(){
   $('#ttKeyIn').value = ttKey(); $('#ttFlowIn').checked = ttFlowOn(); $('#carIn').value = carClass();
-  $('#verNote').textContent = 'しのナビ 版：'+APP_VERSION + (RT ? '　ルート：'+(RT.engine==='tomtom'?(RT.aligned&&RT._aligned!==false?'TomTom→地図に重ね済み':'TomTom'):RT.engine) : '');
+  $('#verNote').textContent = 'しのナビ 版：'+APP_VERSION + '　地図：'+(mapSrc==='tomtom'?'TomTom':'OpenStreetMap') + (RT ? '　ルート：'+(RT.engine==='tomtom'?(RT.aligned&&RT._aligned!==false?'TomTom→地図に重ね済み':'TomTom'):RT.engine) : '');
   $('#settings').classList.remove('hide');
 }
 $('#btnSettings').onclick = openSettings;
@@ -1831,6 +1868,7 @@ $('#setSave').onclick = ()=>{
   if(routeList.length){ routeList.forEach(r=>{ r.tollInfo=estimateToll(r); r.labels=(r.labels||[]).filter(l=>!l.startsWith('ETC')&&l!=='有料'); if(r.tollInfo) r.labels.push(tollText(r.tollInfo)); else if(r.toll) r.labels.push('有料'); }); renderRouteCards(); }
   $('#settings').classList.add('hide');
   if(mapReady && map.getLayer('ttflow')) map.setLayoutProperty('ttflow','visibility',$('#ttFlowIn').checked?'visible':'none');
+  if(mapReady && mapSrc==='tomtom') styleFlowLayers().forEach(id=>{ try{ map.setLayoutProperty(id,'visibility',$('#ttFlowIn').checked?'visible':'none'); }catch(e){} });
   toast(k ? '保存しました。次の検索から渋滞を考慮します' : '保存しました');
   if(k && !had) setTimeout(()=>location.reload(), 900);    // 地図の渋滞表示を読み込むため
 };
@@ -1936,7 +1974,7 @@ function updateNav(){
     if(offCount>=3 && Date.now()-lastReroute>10000){ reroute(); return; }
   } else offCount = 0;
 
-  const remain = RT.distance - pr.along;
+  const remain = RT.distance - pr.along; RT._curAlong = pr.along;
   if(remain < 25){ arrive(); return; }
 
   // 走った部分はグレー、残りは青

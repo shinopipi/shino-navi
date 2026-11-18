@@ -25,6 +25,10 @@
 GitHub Pages で公開したページを iPhone の Safari で開き、「ホーム画面に追加」するとアプリのように使えます。
 現在地を使うため、https のページで開いてください。
 
+## 地図について
+
+TomTomのAPIキーを設定すると、地図・ルート・渋滞をすべてTomTomのデータにそろえて表示します（線と道路がずれない）。キーがない時は OpenStreetMap の地図で動きます。
+
 ## 使っているもの
 
 - 地図：OpenFreeMap（OpenStreetMap）＋ MapLibre GL。読み込めない時は国土地理院の地図
