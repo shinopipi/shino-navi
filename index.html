@@ -129,6 +129,7 @@ body.night .rb.ok{background:#173d24;color:#81c995}body.night .rb.toll{backgroun
 body.navi #fab{bottom:calc(96px + var(--sb))}
 .fab{width:50px;height:50px;border-radius:50%;background:var(--card);color:var(--sub);box-shadow:var(--shadow);font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center}
 .fab svg{width:24px;height:24px;fill:var(--acc)}
+.fab.on{background:var(--acc);box-shadow:0 0 0 3px #fff,var(--shadow)}
 #recenter{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(140px + var(--sb));z-index:21;background:var(--card);color:var(--acc);
   border-radius:24px;padding:12px 20px;font-weight:600;box-shadow:var(--shadow)}
 #toast{white-space:pre-line;position:fixed;left:50%;top:calc(50% - 30px);transform:translateX(-50%);z-index:50;background:#323232;color:#fff;padding:12px 18px;border-radius:8px;font-size:15px;max-width:90vw;text-align:center}
@@ -201,6 +202,7 @@ body.hw #speedo,body.hw #roadNow{display:none!important}
 </div>
 
 <div id="fab">
+  <button class="fab" id="btnPhoto" title="航空写真3D" style="font-size:20px">🛰️</button>
   <button class="fab" id="btnSettings" title="設定" style="font-size:20px">⚙️</button>
   <button class="fab" id="btnRules" title="交通規制" style="font-size:20px">⛔</button>
   <button class="fab" id="btnView" title="地図の向き">3D</button>
@@ -278,6 +280,7 @@ let is3D = true, northUp = false, night = false;
 let spoken = new Set(), offCount = 0, lastReroute = 0, rerouting = false;
 let sim = null, wakeLock = null;
 let styleBase = null, jvMap = null, jvReady = false, jvPending = null;   // 3D拡大図
+let photoOn = false;   // 航空写真3D
 
 /* ================= 便利関数 ================= */
 function toast(msg, ms=2600){ const t=$('#toast'); t.textContent=msg; t.classList.remove('hide'); clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.add('hide'),ms); }
@@ -332,7 +335,7 @@ async function initMap(){
     localIdeographFontFamily:'"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP","Yu Gothic",sans-serif',
     attributionControl:{compact:true, customAttribution:'ルート: OSRM / © OpenStreetMap'}});
   map.on('load', ()=>{
-    declutter(); add3DBuildings(); addRouteLayers(); addTrafficLayers(); mapReady = true; addRuleLayers(); applyTheme();
+    declutter(); add3DBuildings(); addRouteLayers(); addTrafficLayers(); mapReady = true; addRuleLayers(); applyTheme(); addPhotoLayers();
     if(RT) drawRoute();
   });
   const userMove = e => { if(navigating && e.originalEvent){ follow=false; $('#recenter').classList.remove('hide'); } };
@@ -416,13 +419,14 @@ function applyTheme(){
   const P = night ? THEMES.night : THEMES.day;
   if(!document.body.classList.contains('raster')){
     map.getStyle().layers.forEach(l=>{
-      if(/^(route|done|rule|alt|traffic|ttflow)/.test(l.id)) return;
+      if(/^(route|done|rule|alt|traffic|ttflow|photo)/.test(l.id)) return;
       const p = themePaint(l,P);
       for(const k in p){ try{ map.setPaintProperty(l.id,k,p[k]); }catch(e){} }
     });
   }
   try{ map.setSky(P.sky); }catch(e){}
   try{ map.setLight({anchor:'map', position:[1.3,200,40], color:P.light.color, intensity:P.light.intensity}); }catch(e){}
+  if(photoOn) photoTweaks();
   map.setPaintProperty('route-shadow','line-color',P.routeShadow);
   map.setPaintProperty('route-line','line-color',P.route);
   map.setPaintProperty('route-casing','line-color',P.routeCase);
@@ -1207,6 +1211,58 @@ function jvSignsHtml(s){
   const box = (txt,dir,hi)=>`<div class="gsign${hi?' hi':''}">${dir<0?arr(-1):''}<div class="gtxt">${txt.split('・').slice(0,2).map(t=>t.replace(/[<>&]/g,'')).join('<br>')}</div>${dir>0?arr(1):''}</div>`;
   return left ? box(mine,-1,true)+box(other,1,false) : box(other,-1,false)+box(mine,1,true);
 }
+
+/* ================= 航空写真3Dモード =================
+   国土地理院の航空写真（シームレス空中写真）を、地形の高さ（標高データ）に貼って立体表示。
+   建物は半透明の立体で重ね、道路と地名は写真の上に見やすく表示 */
+const photoSaved = new Map(); const photoHidden = new Set();
+function addPhotoLayers(){
+  map.addSource('gsiphoto', {type:'raster', tileSize:256, maxzoom:18,
+    tiles:['https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg'],
+    attribution:'<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院 航空写真</a>'});
+  map.addSource('dem', {type:'raster-dem', encoding:'terrarium', tileSize:256, maxzoom:15,
+    tiles:['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'], attribution:'標高: Mapzen/AWS Terrain Tiles'});
+  const first = map.getStyle().layers.find(l=>l.type!=='background');
+  map.addLayer({id:'photo', type:'raster', source:'gsiphoto', layout:{visibility:'none'},
+    paint:{'raster-fade-duration':150}}, first && first.id);
+  try{ if(localStorage.getItem('photo3d')==='1') setPhoto(true, true); }catch(e){}
+}
+function photoTweaks(){
+  const st = map.getStyle();
+  st.layers.forEach(l=>{
+    if(/^(photo|route|done|rule|alt|traffic|ttflow|sig)/.test(l.id) || l.type==='background' || l.type==='raster') return;
+    const sl = l['source-layer']||'';
+    const save = (k)=>{ const key=l.id+'|'+k; if(!photoSaved.has(key)) photoSaved.set(key, map.getPaintProperty(l.id,k)); };
+    try{
+      if(l.type==='fill' && (l.layout||{}).visibility!=='none'){ map.setLayoutProperty(l.id,'visibility','none'); photoHidden.add(l.id); }
+      else if(l.type==='line' && sl==='transportation'){ save('line-opacity'); map.setPaintProperty(l.id,'line-opacity', l.id.includes('casing')?0:.6); }
+      else if(l.type==='line' && (sl==='waterway'||sl==='boundary'||sl==='building')){ save('line-opacity'); map.setPaintProperty(l.id,'line-opacity',0); }
+      else if(l.type==='fill-extrusion'){ map.setPaintProperty(l.id,'fill-extrusion-color','#f4f2ee'); map.setPaintProperty(l.id,'fill-extrusion-opacity',.38); }
+      else if(l.type==='symbol' && l.layout && l.layout['text-field']){ map.setPaintProperty(l.id,'text-color','#ffffff'); map.setPaintProperty(l.id,'text-halo-color','rgba(0,0,0,.85)'); map.setPaintProperty(l.id,'text-halo-width',1.6); }
+    }catch(e){}
+  });
+  try{ map.setPaintProperty('photo','raster-brightness-max', night ? .65 : 1); map.setPaintProperty('photo','raster-saturation', night ? -.3 : .1); }catch(e){}
+}
+function setPhoto(v, silent){
+  if(!mapReady || !map.getLayer('photo')) return;
+  photoOn = v;
+  try{ localStorage.setItem('photo3d', v?'1':'0'); }catch(e){}
+  $('#btnPhoto').classList.toggle('on', v);
+  map.setLayoutProperty('photo','visibility', v?'visible':'none');
+  if(v){
+    photoTweaks();
+    try{ map.setTerrain({source:'dem', exaggeration:1.3}); }catch(e){}
+    if(!navigating && !silent) map.easeTo({pitch:62, bearing:map.getBearing()-25, zoom:Math.max(map.getZoom(),15), duration:1400});
+  } else {
+    try{ map.setTerrain(null); }catch(e){}
+    photoHidden.forEach(id=>{ try{ map.setLayoutProperty(id,'visibility','visible'); }catch(e){} }); photoHidden.clear();
+    photoSaved.forEach((val,key)=>{ const [id,k]=key.split('|'); try{ map.setPaintProperty(id,k,val===undefined?null:val); }catch(e){} }); photoSaved.clear();
+    applyTheme();
+    if(!navigating && !silent) map.easeTo({pitch:0, bearing:0, duration:1000});
+  }
+  if(!silent) toast(v ? '🛰️ 航空写真3D' : '🗺️ 通常の地図');
+}
+$('#btnPhoto').onclick = ()=>setPhoto(!photoOn);
 
 /* ================= 検索 ================= */
 function recent(){ try{ return JSON.parse(localStorage.getItem('navi_recent')||'[]'); }catch(e){ return []; } }
