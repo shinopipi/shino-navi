@@ -101,6 +101,29 @@ body:not(.navi) #clock{display:none}
 .btn.go{flex:1;background:var(--acc);color:#fff;border:0;font-size:16px}
 body.night .btn.go{color:#202124}
 
+/* ===== ルート候補 ===== */
+#routes{display:flex;flex-direction:column;gap:8px;max-height:min(40vh,330px);overflow:auto;margin:2px 0 8px}
+.rcard{border:1.5px solid var(--line);border-radius:14px;padding:9px 12px;cursor:pointer}
+.rcard.sel{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 8%,var(--card))}
+.rtop{display:flex;align-items:baseline;gap:10px}
+.rtime{font-size:22px;font-weight:700;color:var(--txt)}
+.rtime.good{color:var(--eta)}.rtime.mid{color:#e37400}.rtime.bad{color:#d93025}
+.rdist{color:var(--sub);font-size:14px}
+.rbadges{display:flex;flex-wrap:wrap;gap:5px;margin-top:4px;align-items:center}
+.rb{font-size:11px;font-weight:700;border-radius:6px;padding:2px 7px;background:var(--card2);color:var(--sub)}
+.rb.rec{background:var(--acc);color:#fff}.rb.ok{background:#e6f4ea;color:#137333}.rb.toll{background:#fef7e0;color:#b06000}
+body.night .rb.ok{background:#173d24;color:#81c995}body.night .rb.toll{background:#3d3214;color:#fdd663}
+.rtraf{font-size:12px;font-weight:600}.rtraf.good{color:var(--eta)}.rtraf.mid{color:#e37400}.rtraf.bad{color:#d93025}
+.rvia{font-size:12px;color:var(--sub);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#engineNote{font-size:12px;color:var(--sub);margin:0 0 10px}
+#settings{position:fixed;inset:0;z-index:60;background:#0008;display:flex;align-items:center;justify-content:center;padding:20px}
+.setBox{background:var(--card);color:var(--txt);border-radius:18px;padding:18px;width:min(420px,100%);box-shadow:var(--shadow)}
+.setBox h3{margin:0 0 12px}
+.setBox label{display:block;font-size:13px;color:var(--sub);margin:8px 0 4px}
+.setBox input[type=text]{width:100%;font-size:15px;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--card2);color:var(--txt)}
+.setNote{font-size:12px;color:var(--sub)}.setNote a{color:var(--acc)}
+.setBox .chk{display:flex;gap:8px;align-items:center;color:var(--txt);font-size:14px;margin:10px 0 14px}
+
 /* ===== 右のボタン（白い丸） ===== */
 #fab{position:fixed;right:calc(12px + var(--sr));bottom:calc(210px + var(--sb));z-index:20;display:flex;flex-direction:column;gap:10px}
 body.navi #fab{bottom:calc(96px + var(--sb))}
@@ -178,6 +201,7 @@ body.hw #speedo,body.hw #roadNow{display:none!important}
 </div>
 
 <div id="fab">
+  <button class="fab" id="btnSettings" title="設定" style="font-size:20px">⚙️</button>
   <button class="fab" id="btnRules" title="交通規制" style="font-size:20px">⛔</button>
   <button class="fab" id="btnView" title="地図の向き">3D</button>
   <button class="fab" id="btnNight" title="昼夜">🌙</button>
@@ -193,8 +217,10 @@ body.hw #speedo,body.hw #roadNow{display:none!important}
 </div>
 
 <div id="panel" class="hide">
-  <div id="sum"></div>
   <div id="destName"></div>
+  <div id="sum"></div>
+  <div id="routes"></div>
+  <div id="engineNote"></div>
   <div class="btns">
     <button class="btn" id="btnCancel">やめる</button>
     <button class="btn" id="btnSim">テスト走行</button>
@@ -207,6 +233,16 @@ body.hw #speedo,body.hw #roadNow{display:none!important}
   <button id="endNav" aria-label="終了">✕</button>
 </div>
 
+<div id="settings" class="hide">
+  <div class="setBox">
+    <h3>設定</h3>
+    <label>TomTom APIキー（リアルタイム渋滞）</label>
+    <input id="ttKeyIn" type="text" autocomplete="off" placeholder="ここにキーを貼り付け">
+    <p class="setNote">無料の開発者登録で取得できます：<a href="https://developer.tomtom.com/" target="_blank" rel="noopener">developer.tomtom.com</a><br>キーはこのスマホの中だけに保存されます。</p>
+    <label class="chk"><input id="ttFlowIn" type="checkbox"> 地図に渋滞を色で表示する</label>
+    <div class="btns"><button class="btn" id="setClose">閉じる</button><button class="btn go" id="setSave">保存</button></div>
+  </div>
+</div>
 <div id="toast" class="hide"></div>
 
 <script>
@@ -296,7 +332,7 @@ async function initMap(){
     localIdeographFontFamily:'"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP","Yu Gothic",sans-serif',
     attributionControl:{compact:true, customAttribution:'ルート: OSRM / © OpenStreetMap'}});
   map.on('load', ()=>{
-    declutter(); add3DBuildings(); addRouteLayers(); mapReady = true; addRuleLayers(); applyTheme();
+    declutter(); add3DBuildings(); addRouteLayers(); addTrafficLayers(); mapReady = true; addRuleLayers(); applyTheme();
     if(RT) drawRoute();
   });
   const userMove = e => { if(navigating && e.originalEvent){ follow=false; $('#recenter').classList.remove('hide'); } };
@@ -380,7 +416,7 @@ function applyTheme(){
   const P = night ? THEMES.night : THEMES.day;
   if(!document.body.classList.contains('raster')){
     map.getStyle().layers.forEach(l=>{
-      if(/^(route|done|rule)/.test(l.id)) return;
+      if(/^(route|done|rule|alt|traffic|ttflow)/.test(l.id)) return;
       const p = themePaint(l,P);
       for(const k in p){ try{ map.setPaintProperty(l.id,k,p[k]); }catch(e){} }
     });
@@ -1229,17 +1265,18 @@ async function setDest(lat, lng, name){
   destMarker.setLngLat([lng,lat]).addTo(map);
   saveRecent(dest);
   $('#destName').textContent = name+' まで';
-  $('#sum').textContent = 'ルートを検索中…';
+  $('#sum').textContent = 'ルートを検索中…'; $('#routes').innerHTML=''; $('#engineNote').textContent='';
   $('#panel').classList.remove('hide');
   let from = pos;
   if(!from){ const c=map.getCenter(); from={lat:c.lat,lng:c.lng}; toast('現在地が取れないため、地図の中心を出発地にしました'); }
   try{
     await calcRoute(from, dest);
-    const xs=RT.coords.map(c=>c.lng), ys=RT.coords.map(c=>c.lat);
+    const all=routeList.flatMap(r=>r.coords), xs=all.map(c=>c.lng), ys=all.map(c=>c.lat);
     const land = innerWidth>innerHeight && innerHeight<=540;
     map.fitBounds([[Math.min(...xs),Math.min(...ys)],[Math.max(...xs),Math.max(...ys)]],
-      {padding: land?{top:40,bottom:40,left:Math.min(440,innerWidth*0.52),right:80}:{top:90,bottom:230,left:40,right:80}, bearing:0, pitch:0, duration:800});
-    $('#sum').innerHTML = `<span class="t">${fmtDur(RT.duration)}</span><span>(${fmtDist(RT.distance)})</span><span>${fmtClock(Date.now()+RT.duration*1000)} 着</span>`;
+      {padding: land?{top:40,bottom:40,left:Math.min(440,innerWidth*0.52),right:80}:{top:90,bottom:Math.min(innerHeight*0.55,470),left:40,right:80}, bearing:0, pitch:0, duration:800});
+    $('#sum').textContent = '';
+    renderRouteCards();
   }catch(e){
     $('#sum').textContent = 'ルートが見つかりませんでした（'+e.message+'）';
   }
@@ -1271,27 +1308,6 @@ function buildRT(coords, steps, duration, engine){
   });
   return {coords, cum, steps, distance:cum[cum.length-1], duration, lastIdx:0, engine, time:Date.now()};
 }
-async function routeValhalla(from, to){
-  const req = {locations:[{lat:from.lat,lon:from.lng},{lat:to.lat,lon:to.lng}], costing:'auto', units:'kilometers',
-               language:'ja-JP', date_time:{type:0}, format:'osrm'};   // type:0 = 今出発（今の時刻の規制で探す）
-  const ctl = new AbortController(); const tm = setTimeout(()=>ctl.abort(), 9000);
-  const r = await fetch('https://valhalla1.openstreetmap.de/route?json='+encodeURIComponent(JSON.stringify(req)), {signal:ctl.signal});
-  clearTimeout(tm);
-  const j = await r.json();
-  if(j.routes && j.routes.length){             // OSRM形式（車線・方面つき）
-    const rt=j.routes[0], g=rt.geometry;
-    const coords = typeof g==='string' ? decode6(g) : g.coordinates.map(c=>({lng:c[0],lat:c[1]}));
-    return buildRT(coords, rt.legs[0].steps, rt.duration, 'valhalla');
-  }
-  if(!j.trip) throw new Error(j.error||'valhalla');
-  const leg = j.trip.legs[0], coords = decode6(leg.shape);
-  const steps = leg.maneuvers.map(m=>{
-    const t = VT[m.type] || ['continue','straight'], c = coords[Math.min(m.begin_shape_index,coords.length-1)];
-    return {maneuver:{type:t[0], modifier:t[1], location:[c.lng,c.lat], exit:m.roundabout_exit_count},
-            name:(m.street_names||[])[0]||'', ref:'', _idx:m.begin_shape_index};
-  });
-  return buildRT(coords, steps, j.trip.summary.time, 'valhalla');
-}
 async function routeOSRM(from, to){
   const url = `https://router.project-osrm.org/route/v1/driving/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson&steps=true`;
   const j = await (await fetch(url)).json();
@@ -1299,19 +1315,206 @@ async function routeOSRM(from, to){
   const rt = j.routes[0];
   return buildRT(rt.geometry.coordinates.map(c=>({lng:c[0], lat:c[1]})), rt.legs[0].steps, rt.duration, 'osrm');
 }
+/* ================= リアルタイム渋滞つきルート（TomTom） =================
+   TomTom Routing API：traffic=true / departAt=now で「今の渋滞」を考慮
+   ・候補を最大5件（最速＋別ルート4件）
+   ・渋滞区間（軽い/中/重い/通行止め）、渋滞による遅れ、有料道路の有無、車線情報
+   キーがない時・失敗した時は Valhalla（渋滞は考慮しない）で最大5件 */
+let routeList = [], recIdx = 0, selIdx = 0;
+function ttKey(){ try{ return localStorage.getItem('tt_key')||''; }catch(e){ return ''; } }
+function ttFlowOn(){ try{ return localStorage.getItem('tt_flow')!=='0'; }catch(e){ return true; } }
+const TT_MAN = {DEPART:['depart','straight'],ARRIVE:['arrive','straight'],ARRIVE_LEFT:['arrive','left'],ARRIVE_RIGHT:['arrive','right'],
+  STRAIGHT:['continue','straight'],FOLLOW:['continue','straight'],KEEP_RIGHT:['fork','slight right'],KEEP_LEFT:['fork','slight left'],
+  BEAR_RIGHT:['turn','slight right'],TURN_RIGHT:['turn','right'],SHARP_RIGHT:['turn','sharp right'],
+  BEAR_LEFT:['turn','slight left'],TURN_LEFT:['turn','left'],SHARP_LEFT:['turn','sharp left'],
+  MAKE_UTURN:['turn','uturn'],TRY_MAKE_UTURN:['turn','uturn'],
+  ENTER_MOTORWAY:['on ramp','slight left'],ENTER_FREEWAY:['on ramp','slight left'],ENTER_HIGHWAY:['on ramp','slight left'],ENTRANCE_RAMP:['on ramp','slight left'],
+  TAKE_EXIT:['off ramp','slight left'],MOTORWAY_EXIT_LEFT:['off ramp','slight left'],MOTORWAY_EXIT_RIGHT:['off ramp','slight right'],
+  ROUNDABOUT_CROSS:['roundabout','straight'],ROUNDABOUT_RIGHT:['roundabout','right'],ROUNDABOUT_LEFT:['roundabout','left'],ROUNDABOUT_BACK:['roundabout','uturn'],
+  SWITCH_PARALLEL_ROAD:['continue','straight'],SWITCH_MAIN_ROAD:['continue','straight'],TAKE_FERRY:['continue','straight']};
+const TT_LANE = {STRAIGHT:'straight',SLIGHT_RIGHT:'slight right',RIGHT:'right',SHARP_RIGHT:'sharp right',SLIGHT_LEFT:'slight left',
+  LEFT:'left',SHARP_LEFT:'sharp left',LEFT_U_TURN:'uturn',RIGHT_U_TURN:'uturn'};
+function viaNames(rt){                      // 主に通る道（距離の長い順に2つ）
+  const m = new Map();
+  rt.steps.forEach((s,i)=>{ const n=s.name||s.ref; if(!n) return; const nx=rt.steps[i+1]; const len=(nx?nx._at:rt.distance)-s._at; m.set(n,(m.get(n)||0)+len); });
+  return [...m.entries()].sort((a,b)=>b[1]-a[1]).slice(0,2).map(e=>e[0]);
+}
+async function routesTomTom(from, to, key){
+  const url = `https://api.tomtom.com/routing/1/calculateRoute/${from.lat},${from.lng}:${to.lat},${to.lng}/json?key=${encodeURIComponent(key)}`
+    + '&traffic=true&departAt=now&routeType=fastest&travelMode=car&maxAlternatives=4&computeTravelTimeFor=all'
+    + '&sectionType=traffic&sectionType=lanes&sectionType=tollRoad&instructionsType=tagged&language=ja-JP&routeRepresentation=polyline';
+  const ctl = new AbortController(); const tm = setTimeout(()=>ctl.abort(), 12000);
+  const r = await fetch(url, {signal:ctl.signal}); clearTimeout(tm);
+  if(r.status===403 || r.status===401) throw new Error('TomTomのAPIキーが正しくありません');
+  const j = await r.json();
+  if(!j.routes || !j.routes.length) throw new Error((j.error&&j.error.description)||'ルートなし');
+  return j.routes.map(rt=>{
+    const coords = rt.legs.flatMap(l=>l.points).map(p=>({lat:p.latitude, lng:p.longitude}));
+    const ins = (rt.guidance && rt.guidance.instructions) || [];
+    const steps = ins.map(x=>{
+      const t = TT_MAN[x.maneuver] || ['continue','straight'];
+      return {maneuver:{type:t[0], modifier:t[1], location:[x.point.longitude,x.point.latitude], exit:x.roundaboutExitNumber},
+        name:x.street||'', ref:(x.roadNumbers||[])[0]||'', destinations:x.signpostText||'', _idx:x.pointIndex, intersections:[]};
+    });
+    if(!steps.length || steps[0].maneuver.type!=='depart') steps.unshift({maneuver:{type:'depart',modifier:'straight',location:[coords[0].lng,coords[0].lat]},name:'',_idx:0,intersections:[]});
+    const secs = rt.sections||[];
+    // 車線：車線区間の終わりにある案内に付ける
+    secs.filter(s=>s.sectionType==='LANES' && s.lanes).forEach(s=>{
+      const st = steps.find(x=>x._idx>=s.startPointIndex && x._idx<=s.endPointIndex+3);
+      if(st) st.intersections=[{lanes:s.lanes.map(l=>({indications:(l.directions||[]).map(d=>TT_LANE[d]||'straight'), valid:!!l.follow}))}];
+    });
+    const R = buildRT(coords, steps, rt.summary.travelTimeInSeconds, 'tomtom');
+    R.delay = rt.summary.trafficDelayInSeconds||0;
+    R.noTraffic = rt.summary.noTrafficTravelTimeInSeconds || rt.summary.travelTimeInSeconds;
+    R.toll = secs.some(s=>s.sectionType==='TOLL_ROAD');
+    R.traffic = secs.filter(s=>s.sectionType==='TRAFFIC').map(s=>({i0:s.startPointIndex, i1:s.endPointIndex, mag:s.magnitudeOfDelay??1,
+      cat:s.simpleCategory||'', delay:s.delayInSeconds||0, kmh:s.effectiveSpeedInKmh}));
+    R.via = viaNames(R);
+    return R;
+  });
+}
+async function routesValhalla(from, to){
+  const req = {locations:[{lat:from.lat,lon:from.lng},{lat:to.lat,lon:to.lng}], costing:'auto', units:'kilometers',
+               language:'ja-JP', date_time:{type:0}, format:'osrm', alternates:4};
+  const ctl = new AbortController(); const tm = setTimeout(()=>ctl.abort(), 10000);
+  const r = await fetch('https://valhalla1.openstreetmap.de/route?json='+encodeURIComponent(JSON.stringify(req)), {signal:ctl.signal});
+  clearTimeout(tm);
+  const j = await r.json();
+  if(!j.routes || !j.routes.length) throw new Error(j.error||'valhalla');
+  return j.routes.map(rt=>{ const g=rt.geometry;
+    const coords = typeof g==='string' ? decode6(g) : g.coordinates.map(c=>({lng:c[0],lat:c[1]}));
+    const R = buildRT(coords, rt.legs[0].steps, rt.duration, 'valhalla'); R.via=viaNames(R); return R; });
+}
+async function searchRoutes(from, to){
+  const key = ttKey();
+  if(key){
+    try{ return await routesTomTom(from, to, key); }
+    catch(e){ toast('渋滞情報つきの検索に失敗しました（'+e.message+'）。渋滞を考慮せずに探します', 4500); }
+  }
+  try{ return await routesValhalla(from, to); }
+  catch(e){ const R = await routeOSRM(from, to); R.via=viaNames(R); return [R]; }
+}
+// おすすめ＝「重い渋滞（中以上）がないルートの中で最速」。どれも渋滞していれば単純に最速
+function pickRecommended(list){
+  const t = r=>r.duration;
+  const heavy = r=>(r.traffic||[]).some(x=>x.mag>=2 || x.cat==='ROAD_CLOSURE');
+  const fastest = list.reduce((b,r,i)=>t(r)<t(list[b])?i:b, 0);
+  const clean = list.map((r,i)=>i).filter(i=>!heavy(list[i]));
+  const bestClean = clean.length ? clean.reduce((b,i)=>t(list[i])<t(list[b])?i:b, clean[0]) : fastest;
+  // 渋滞なしルートが最速より10分以上遅いなら、最速を優先
+  recIdx = t(list[bestClean]) - t(list[fastest]) <= 600 ? bestClean : fastest;
+  list.forEach((r,i)=>{ r.labels=[]; if(i===recIdx) r.labels.push('おすすめ'); if(i===fastest) r.labels.push('最速'); if(r.toll) r.labels.push('有料'); });
+  return recIdx;
+}
 async function calcRoute(from, to){
-  try{ RT = await routeValhalla(from, to); }
-  catch(e){ RT = await routeOSRM(from, to); }
-  spoken = new Set();
-  drawRoute();
-  checkRouteRules();
-  computeRouteSignals();
-  loadRouteSignals();
+  routeList = await searchRoutes(from, to);
+  pickRecommended(routeList);
+  selIdx = recIdx; RT = routeList[selIdx];
+  afterRouteSet();
+}
+function afterRouteSet(){
+  spoken = new Set(); RT.lastIdx = 0;
+  drawRoute(); drawAlts(); drawTraffic();
+  checkRouteRules(); computeRouteSignals(); loadRouteSignals();
+}
+function selectRoute(i){
+  if(!routeList[i]) return;
+  selIdx = i; RT = routeList[i]; afterRouteSet(); renderRouteCards();
 }
 
+/* ---- 地図への描画：他の候補（灰色）と渋滞区間（黄・オレンジ・赤） ---- */
+function addTrafficLayers(){
+  const before = 'route-shadow';
+  map.addSource('alts', {type:'geojson', data:{type:'FeatureCollection',features:[]}});
+  map.addSource('traffic', {type:'geojson', data:{type:'FeatureCollection',features:[]}});
+  const w=(a,b,c)=>['interpolate',['linear'],['zoom'],10,a,15,b,18,c];
+  map.addLayer({id:'alt-casing', type:'line', source:'alts', layout:{'line-join':'round','line-cap':'round'},
+    paint:{'line-color':'#ffffff','line-width':w(6,11,24)}}, before);
+  map.addLayer({id:'alt-line', type:'line', source:'alts', layout:{'line-join':'round','line-cap':'round'},
+    paint:{'line-color':'#8fa3bf','line-width':w(3.5,7,16)}}, before);
+  map.addLayer({id:'traffic-line', type:'line', source:'traffic', layout:{'line-join':'round','line-cap':'round'},
+    paint:{'line-color':['match',['get','mag'],0,'#f9ab00',1,'#f9ab00',2,'#f57c00',3,'#d93025','#7f0000'],'line-width':w(3,7,16)}});
+  map.on('click','alt-line', e=>{ if(navigating) return; const i=e.features[0].properties.idx; selectRoute(i); });
+  // 地図全体の渋滞（TomTom 交通流タイル）
+  const key = ttKey();
+  if(key){
+    map.addSource('ttflow', {type:'raster', tileSize:256, maxzoom:18,
+      tiles:[`https://api.tomtom.com/traffic/map/4/tile/flow/relative0/{z}/{x}/{y}.png?key=${encodeURIComponent(key)}&tileSize=256`],
+      attribution:'渋滞情報 © TomTom'});
+    map.addLayer({id:'ttflow', type:'raster', source:'ttflow', minzoom:10, paint:{'raster-opacity':.75},
+      layout:{visibility: ttFlowOn()?'visible':'none'}}, 'alt-casing');
+  }
+}
+function drawAlts(){
+  if(!mapReady || !map.getSource('alts')) return;
+  const f = navigating ? [] : routeList.map((r,i)=>i===selIdx?null:{type:'Feature',properties:{idx:i},
+    geometry:{type:'LineString',coordinates:r.coords.map(c=>[c.lng,c.lat])}}).filter(Boolean);
+  map.getSource('alts').setData({type:'FeatureCollection',features:f});
+}
+function drawTraffic(){
+  if(!mapReady || !map.getSource('traffic')) return;
+  const f = (RT && RT.traffic || []).map(t=>({type:'Feature',properties:{mag:t.mag},
+    geometry:{type:'LineString',coordinates:RT.coords.slice(t.i0, t.i1+1).map(c=>[c.lng,c.lat])}})).filter(x=>x.geometry.coordinates.length>1);
+  map.getSource('traffic').setData({type:'FeatureCollection',features:f});
+}
+
+/* ---- ルート候補のカード ---- */
+function renderRouteCards(){
+  const box = $('#routes'); box.innerHTML = '';
+  const tomtom = routeList[0] && routeList[0].engine==='tomtom';
+  $('#engineNote').innerHTML = tomtom ? '🟢 リアルタイムの渋滞を考慮（TomTom）'
+    : '⚪ 渋滞は考慮していません。<u>設定</u>でTomTomのキーを入れると、今の渋滞で探します';
+  $('#engineNote').onclick = tomtom ? null : openSettings;
+  routeList.forEach((r,i)=>{
+    const c = document.createElement('div'); c.className='rcard'+(i===selIdx?' sel':'');
+    const heavy = (r.traffic||[]).filter(x=>x.mag>=2).length, any=(r.traffic||[]).length;
+    const dcls = !tomtom ? '' : heavy ? 'bad' : any ? 'mid' : 'good';
+    const tline = !tomtom ? '' : (r.delay>=60 ? `渋滞 +${Math.round(r.delay/60)}分（${any}か所）` : any ? `少し混雑（${any}か所）` : '渋滞なし');
+    c.innerHTML = `<div class="rtop"><span class="rtime ${dcls}">${fmtDur(r.duration)}</span><span class="rdist">${fmtDist(r.distance)}・${fmtClock(Date.now()+r.duration*1000)}着</span></div>
+      <div class="rbadges">${(r.labels||[]).map(l=>`<span class="rb ${l==='おすすめ'?'rec':l==='渋滞なし'?'ok':l==='有料'?'toll':''}">${l}</span>`).join('')}${tline?`<span class="rtraf ${dcls}">${tline}</span>`:''}</div>
+      <div class="rvia"></div>`;
+    c.querySelector('.rvia').textContent = r.via && r.via.length ? r.via.join('・')+' 経由' : '';
+    c.onclick = ()=>selectRoute(i);
+    box.appendChild(c);
+  });
+}
+
+/* ---- 案内中：3分ごとに、もっと速いルートがないか確認 ---- */
+let lastBetterCheck = 0;
+async function checkBetterRoute(){
+  if(!navigating || sim || !RT || RT.engine!=='tomtom' || rerouting || !pos || Date.now()-lastBetterCheck<180000) return;
+  lastBetterCheck = Date.now();
+  try{
+    const pr = projectOnRoute(pos), remainT = RT.duration*(1-pr.along/RT.distance);
+    const list = await routesTomTom(pos, dest, ttKey());
+    pickRecommended(list); const best = list[recIdx];
+    if(navigating && best.duration < remainT - 180){
+      routeList = list; selIdx = recIdx; RT = best; afterRouteSet();
+      speak(`渋滞を避ける、${Math.round((remainT-best.duration)/60)}分早いルートに変更しました`);
+      toast('🟢 より早いルートに変更しました', 3500);
+    }
+  }catch(e){}
+}
+
+/* ---- 設定（TomTomのキー） ---- */
+function openSettings(){
+  $('#ttKeyIn').value = ttKey(); $('#ttFlowIn').checked = ttFlowOn();
+  $('#settings').classList.remove('hide');
+}
+$('#btnSettings').onclick = openSettings;
+$('#setClose').onclick = ()=>$('#settings').classList.add('hide');
+$('#setSave').onclick = ()=>{
+  const k = $('#ttKeyIn').value.trim(), had = !!ttKey();
+  try{ if(k) localStorage.setItem('tt_key',k); else localStorage.removeItem('tt_key'); localStorage.setItem('tt_flow', $('#ttFlowIn').checked?'1':'0'); }catch(e){}
+  $('#settings').classList.add('hide');
+  if(mapReady && map.getLayer('ttflow')) map.setLayoutProperty('ttflow','visibility',$('#ttFlowIn').checked?'visible':'none');
+  toast(k ? '保存しました。次の検索から渋滞を考慮します' : '保存しました');
+  if(k && !had) setTimeout(()=>location.reload(), 900);    // 地図の渋滞表示を読み込むため
+};
+
 function clearRoute(){
-  RT=null; dest=null;
-  if(mapReady) drawRoute([],[]);
+  RT=null; dest=null; routeList=[];
+  if(mapReady){ drawRoute([],[]); drawAlts(); drawTraffic(); }
   if(destMarker) destMarker.remove();
   $('#panel').classList.add('hide');
 }
@@ -1477,6 +1680,7 @@ function updateNav(){
   $('#nRemain').textContent = fmtDist(remain);
   $('#nTime').textContent = fmtDur(rs);
   $('#nEta').textContent = fmtClock(Date.now()+rs*1000);
+  checkBetterRoute();
 
   renderHw(pr.along);
   camera(dnext);
@@ -1501,7 +1705,7 @@ function arrive(){
 
 function startNav(withSim){
   if(!RT) return;
-  navigating = true; follow = true; lastNext = null;
+  navigating = true; follow = true; lastNext = null; lastBetterCheck = Date.now(); drawAlts();
   document.body.classList.add('navi');
   $('#panel').classList.add('hide'); $('#searchBox').classList.add('hide'); $('#results').classList.add('hide');
   ['#guide','#navBar','#speedo'].forEach(s=>$(s).classList.remove('hide'));
@@ -1523,7 +1727,7 @@ $('#btnStart').onclick = ()=>{ startCompass(); startNav(false); };
 $('#btnSim').onclick = ()=>{ startCompass(); startNav(true); };
 $('#endNav').onclick = ()=>{
   stopNav(); speechSynthesis.cancel();
-  if(RT){ drawRoute(); $('#panel').classList.remove('hide'); }
+  if(RT){ drawRoute(); drawAlts(); renderRouteCards(); $('#panel').classList.remove('hide'); }
 };
 
 /* ================= テスト走行 ================= */
