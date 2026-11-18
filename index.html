@@ -1502,15 +1502,30 @@ function addTrafficLayers(){
   map.addLayer({id:'traffic-line', type:'line', source:'traffic', layout:{'line-join':'round','line-cap':'round'},
     paint:{'line-color':['match',['get','mag'],0,'#f9ab00',1,'#f9ab00',2,'#f57c00',3,'#d93025','#7f0000'],'line-width':w(3,7,16)}});
   map.on('click','alt-line', e=>{ if(navigating) return; const i=e.features[0].properties.idx; selectRoute(i); });
-  // 地図全体の渋滞（TomTom 交通流タイル）
-  const key = ttKey();
-  if(key){
-    map.addSource('ttflow', {type:'raster', tileSize:256, maxzoom:18,
-      tiles:[`https://api.tomtom.com/traffic/map/4/tile/flow/relative0/{z}/{x}/{y}.png?key=${encodeURIComponent(key)}&tileSize=256`],
-      attribution:'渋滞情報 © TomTom'});
-    map.addLayer({id:'ttflow', type:'raster', source:'ttflow', minzoom:10, paint:{'raster-opacity':.75},
-      layout:{visibility: ttFlowOn()?'visible':'none'}}, 'alt-casing');
+  setupFlow();
+}
+/* 地図全体の渋滞（TomTom 交通流タイル）：起動直後から表示し、1分ごとに最新に更新
+   使えるアドレスを順に試す（Orbis v2 → Orbis v1 → 従来版） */
+let flowTpl = null;
+async function setupFlow(){
+  const key = ttKey(); if(!key) return;
+  const k = encodeURIComponent(key);
+  const cands = [
+    `https://api.tomtom.com/maps/orbis/traffic/flow/raster/tile/{z}/{x}/{y}?apiVersion=2&key=${k}&style=light&tileSize=256`,
+    `https://api.tomtom.com/maps/orbis/traffic/tile/flow/{z}/{x}/{y}.png?apiVersion=1&key=${k}&style=light&tileSize=256`,
+    `https://api.tomtom.com/traffic/map/4/tile/flow/relative0/{z}/{x}/{y}.png?key=${k}&tileSize=256`];
+  for(const t of cands){                      // 東京付近のタイルで試す
+    try{ const r = await fetch(t.replace('{z}','10').replace('{x}','909').replace('{y}','403'));
+      if(r.ok && (r.headers.get('content-type')||'').includes('image')){ flowTpl = t; break; } }catch(e){}
   }
+  if(!flowTpl){ toast('渋滞の地図表示に使えるアドレスが見つかりませんでした（キーの Traffic API を確認）', 4500); return; }
+  map.addSource('ttflow', {type:'raster', tileSize:256, maxzoom:18, tiles:[flowTpl+'&t='+Date.now()], attribution:'渋滞情報 © TomTom'});
+  map.addLayer({id:'ttflow', type:'raster', source:'ttflow', minzoom:9, paint:{'raster-opacity':.8, 'raster-fade-duration':0},
+    layout:{visibility: ttFlowOn()?'visible':'none'}}, 'alt-casing');
+  setInterval(()=>{                            // 1分ごとに最新の渋滞へ
+    if(document.visibilityState!=='visible' || !map.getSource('ttflow') || !ttFlowOn()) return;
+    try{ map.getSource('ttflow').setTiles([flowTpl+'&t='+Date.now()]); }catch(e){}
+  }, 60000);
 }
 function drawAlts(){
   if(!mapReady || !map.getSource('alts')) return;
