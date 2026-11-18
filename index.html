@@ -252,6 +252,7 @@ body.hw #speedo,body.hw #roadNow{display:none!important}
     <label>車種（ETC料金の計算）</label>
     <select id="carIn"><option value="normal">普通車</option><option value="kei">軽自動車</option></select>
     <div class="btns"><button class="btn" id="setClose">閉じる</button><button class="btn go" id="setSave">保存</button></div>
+    <p class="setNote" id="verNote" style="text-align:right;margin:10px 0 0"></p>
   </div>
 </div>
 <div id="toast" class="hide"></div>
@@ -259,6 +260,16 @@ body.hw #speedo,body.hw #roadNow{display:none!important}
 <script>
 'use strict';
 const $ = s => document.querySelector(s);
+/* ---- いつも最新版で動かす（Safariが古いページを覚えていたら読み込み直す） ---- */
+const APP_VERSION = '2026-11-19a';
+(async()=>{ try{
+  const r = await fetch(location.pathname+'?nocache='+Date.now(), {cache:'no-store'});
+  const m = (await r.text()).match(/APP_VERSION = '([^']+)'/);
+  if(m && m[1]!==APP_VERSION){
+    const u = new URL(location.href); if(u.searchParams.get('v')===m[1]) return;   // 無限ループ防止
+    u.searchParams.set('v', m[1]); location.replace(u.toString());
+  }
+}catch(e){} })();
 
 /* ================= 地図スタイル ================= */
 const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
@@ -480,7 +491,7 @@ function addRouteLayers(){
   map.addSource('done',  {type:'geojson', data:FC([])});
   const w = (a,b,c) => ['interpolate',['linear'],['zoom'],10,a,15,b,18,c];
   map.addLayer({id:'done-line', type:'line', source:'done', layout:{'line-join':'round','line-cap':'round'},
-    paint:{'line-color':'#9aa3ad','line-width':w(4,8,18),'line-opacity':.8}}, before);
+    paint:{'line-color':'#9aa3ad','line-width':w(2,4,7),'line-opacity':.45,'line-dasharray':[1,1.5]}}, before);
   map.addLayer({id:'route-shadow', type:'line', source:'route', layout:{'line-join':'round','line-cap':'round'},
     paint:{'line-color':'#0b3d91','line-width':w(10,18,36),'line-blur':w(3,6,10),'line-opacity':.25}}, before);
   map.addLayer({id:'route-casing', type:'line', source:'route', layout:{'line-join':'round','line-cap':'round'},
@@ -1709,7 +1720,7 @@ async function alignRoute(R){
     N._tollSecs = (R._tollSecs||[]).map(s=>[map0(s[0]), map0(s[1])]);
     N.aligned = true;
     return N;
-  }catch(e){ R.aligned = true; return R; }   // 失敗したら元の線のまま
+  }catch(e){ R.aligned = true; R._aligned = false; console.warn('align failed', e); toast('ルートを地図の道路に重ねられませんでした（'+((e&&e.message)||'通信')+'）。少しずれて見える場合があります', 4000); return R; }   // 失敗したら元の線のまま
 }
 
 /* ---- 地図への描画：他の候補（灰色）と渋滞区間（黄・オレンジ・赤） ---- */
@@ -1807,6 +1818,7 @@ async function checkBetterRoute(){
 /* ---- 設定（TomTomのキー） ---- */
 function openSettings(){
   $('#ttKeyIn').value = ttKey(); $('#ttFlowIn').checked = ttFlowOn(); $('#carIn').value = carClass();
+  $('#verNote').textContent = 'しのナビ 版：'+APP_VERSION + (RT ? '　ルート：'+(RT.engine==='tomtom'?(RT.aligned&&RT._aligned!==false?'TomTom→地図に重ね済み':'TomTom'):RT.engine) : '');
   $('#settings').classList.remove('hide');
 }
 $('#btnSettings').onclick = openSettings;
