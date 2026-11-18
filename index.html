@@ -82,6 +82,7 @@ body.jvon #fab{display:none}
 #navInfo{flex:1;min-width:0}
 #nTime{font-size:26px;font-weight:600;color:var(--eta);font-variant-numeric:tabular-nums}
 #nSub{font-size:15px;color:var(--sub);margin-top:2px;font-variant-numeric:tabular-nums}
+#navMusic{width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,#fa233b,#fb5c74);color:#fff;font-size:24px;font-weight:700;flex:none}
 #endNav{width:52px;height:52px;border-radius:50%;background:var(--warn);color:#fff;font-size:22px;font-weight:700;flex:none}
 #roadNow{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(92px + var(--sb));z-index:19;background:var(--card);color:var(--txt);box-shadow:var(--shadow);
   padding:7px 16px;border-radius:20px;font-size:14px;font-weight:500;max-width:60vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -205,6 +206,7 @@ body.hw #speedo,body.hw #roadNow{display:none!important}
 </div>
 
 <div id="fab">
+  <button class="fab" id="btnMusic" title="ミュージック" style="font-size:22px;color:#fa233b">♪</button>
   <button class="fab" id="btnPhoto" title="航空写真3D" style="font-size:20px">🛰️</button>
   <button class="fab" id="btnSettings" title="設定" style="font-size:20px">⚙️</button>
   <button class="fab" id="btnRules" title="交通規制" style="font-size:20px">⛔</button>
@@ -235,6 +237,7 @@ body.hw #speedo,body.hw #roadNow{display:none!important}
 
 <div id="navBar" class="hide">
   <div id="navInfo"><div id="nTime">-</div><div id="nSub"><span id="nRemain">-</span> ・ <span id="nEta">-</span> 着</div></div>
+  <button id="navMusic" aria-label="ミュージック">♪</button>
   <button id="endNav" aria-label="終了">✕</button>
 </div>
 
@@ -1320,6 +1323,16 @@ function estimateToll(R){
   return total ? {yen:total, parts} : null;
 }
 function tollText(t){ return t ? 'ETC 約'+t.yen.toLocaleString()+'円' : ''; }
+
+/* ================= Apple Music を開く =================
+   ブラウザからは他のアプリの再生操作やアルバム写真の取得ができないため、
+   ミュージックアプリを開くボタンにしている（操作はコントロールセンターかSiriで） */
+function openMusic(){
+  if(navigating) toast('ミュージックを開きます。戻るとナビが続きます', 1800);
+  setTimeout(()=>{ location.href = 'music://'; }, navigating ? 600 : 0);
+}
+$('#btnMusic').onclick = openMusic;
+$('#navMusic').onclick = openMusic;
 
 /* ================= 検索 ================= */
 function recent(){ try{ return JSON.parse(localStorage.getItem('navi_recent')||'[]'); }catch(e){ return []; } }
