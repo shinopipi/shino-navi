@@ -18,9 +18,9 @@ GitHub Pages で公開したページを iPhone の Safari で開き、「ホー
 
 ## 使っているもの
 
-- 地図：国土地理院 地理院タイル
+- 地図：OpenFreeMap（OpenStreetMap）＋ MapLibre GL。読み込めない時は国土地理院の地図
 - ルート：OSRM 公開デモサーバー（OpenStreetMap）
 - 検索：Nominatim（OpenStreetMap）、国土地理院 住所検索
-- 地図ライブラリ：Leaflet
+- 表示：進行方向が上の3D地図、車線案内、夜モード、横画面対応
 
 渋滞情報はありません。運転中は画面を操作しないでください。
