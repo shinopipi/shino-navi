@@ -266,7 +266,7 @@ body.hw #speedo,body.hw #roadNow{display:none!important}
 'use strict';
 const $ = s => document.querySelector(s);
 /* ---- いつも最新版で動かす（Safariが古いページを覚えていたら読み込み直す） ---- */
-const APP_VERSION = '2026-11-19h';
+const APP_VERSION = '2026-11-19i';
 (async()=>{ try{
   const r = await fetch(location.pathname+'?nocache='+Date.now(), {cache:'no-store'});
   const m = (await r.text()).match(/APP_VERSION = '([^']+)'/);
@@ -503,7 +503,7 @@ function declutter(){
   });
 }
 
-function firstSymbolId(){ const l = map.getStyle().layers.find(l=>l.type==='symbol'); return l && l.id; }
+function firstSymbolId(){ if(mapSrc==='tomtom') return undefined; const l = map.getStyle().layers.find(l=>l.type==='symbol'); return l && l.id; }
 
 function add3DBuildings(){
   const st = map.getStyle();
@@ -974,6 +974,50 @@ function renderHw(along){
   });
 }
 
+/* ================= 交差点の車線（OpenStreetMap の turn:lanes） =================
+   曲がる交差点に近づいたら（1.2km手前）、その交差点の手前の道の「車線ごとの進行方向」を取得。
+   例 turn:lanes = "left|through|through;right" → ←・↑・↑→。曲がる方向に行ける車線を青く光らせる */
+const OSM_TURN = {left:'left',slight_left:'slight left',sharp_left:'sharp left',through:'straight',right:'right',
+  slight_right:'slight right',sharp_right:'sharp right',reverse:'uturn',merge_to_left:'straight',merge_to_right:'straight',none:'straight','':'straight'};
+const laneBusy = new Set();
+function laneFamily(m){ return /left/.test(m)?'left':/right/.test(m)?'right':m==='uturn'?'uturn':'straight'; }
+async function fetchOsmLanes(s){
+  if(s._lanesTried || laneBusy.has(s)) return; laneBusy.add(s);
+  try{
+    const M = {lng:s.maneuver.location[0], lat:s.maneuver.location[1]};
+    const A = pointAlong(s._at-35), A2 = pointAlong(s._at-10);           // 交差点の少し手前（進む道の上）
+    const q = `[out:json][timeout:15];way(around:45,${A.lat.toFixed(6)},${A.lng.toFixed(6)})["highway"][~"^turn:lanes"~"."];out tags geom;`;
+    let els = null;
+    for(const ep of ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter']){
+      try{ const r = await fetch(ep+'?data='+encodeURIComponent(q)); if(r.ok){ els = (await r.json()).elements; break; } }catch(e){}
+    }
+    s._lanesTried = true;
+    if(!els || !els.length) return;
+    const travel = bearing(A, A2);
+    let best=null, bd=25;
+    els.forEach(w=>{
+      const g = (w.geometry||[]).map(p=>({lat:p.lat,lng:p.lon}));
+      for(let i=0;i<g.length-1;i++){
+        const mid = {lat:(g[i].lat+g[i+1].lat)/2, lng:(g[i].lng+g[i+1].lng)/2};
+        const d = Math.min(dist(A,g[i]), dist(A,g[i+1]), dist(A,mid));
+        const wb = bearing(g[i],g[i+1]), diff = Math.abs(angDiff(wb,travel));
+        if(d<bd && (diff<45 || diff>135)){ bd=d; best={w, forward: diff<45}; }
+      }
+    });
+    if(!best) return;
+    const t = best.w.tags;
+    const val = t['turn:lanes'] && (t.oneway==='yes' || !t['turn:lanes:backward'] && !t['turn:lanes:forward']) ? t['turn:lanes']
+              : best.forward ? t['turn:lanes:forward'] : t['turn:lanes:backward'];
+    if(!val) return;
+    const fam = laneFamily(s.maneuver.modifier||'straight');
+    const lanes = val.split('|').map(x=>{
+      const ind = x.split(';').map(v=>OSM_TURN[v.trim()] ?? 'straight');
+      return {indications:ind, valid: ind.some(i=>laneFamily(i)===fam)};
+    });
+    if(lanes.length>=2 && lanes.some(l=>l.valid)){ s.intersections = [{...(s.intersections&&s.intersections[0]||{}), lanes}]; }
+  }finally{ laneBusy.delete(s); }
+}
+
 /* ================= 交差点・分岐の拡大図 =================
    曲がる場所の 300m 手前から表示（近づくほど交差点が手前に来る）
    ・一般道：横断歩道、車線の矢印、通る車線を青く、オレンジの進路矢印、信号
@@ -1220,7 +1264,7 @@ function ensureJV(){
         paint:{'fill-extrusion-color':'#ecebe8','fill-extrusion-height':['coalesce',['get','render_height'],8],
           'fill-extrusion-base':['coalesce',['get','render_min_height'],0],'fill-extrusion-opacity':1,'fill-extrusion-vertical-gradient':true}});
     }
-    const before = (m.getStyle().layers.find(l=>l.type==='symbol')||{}).id;
+    const before = mapSrc==='tomtom' ? undefined : (m.getStyle().layers.find(l=>l.type==='symbol')||{}).id;
     const k=2, c=document.createElement('canvas'); c.width=c.height=64*k; const g=c.getContext('2d'); g.scale(k,k);
     g.fillStyle='#fff'; g.beginPath(); g.moveTo(32,2); g.lineTo(62,52); g.lineTo(2,52); g.closePath(); g.fill();
     g.fillStyle='#ffc400'; g.beginPath(); g.moveTo(32,10); g.lineTo(54,47); g.lineTo(10,47); g.closePath(); g.fill();
@@ -2074,6 +2118,7 @@ function updateNav(){
   $('#barFill').style.width = Math.max(0,Math.min(100, dnext/barMax*100))+'%';
 
   // 車線
+  if(dnext<1200 && /turn|fork|end of road|ramp/.test(s.maneuver.type) && !(s.intersections&&s.intersections[0]&&s.intersections[0].lanes)) fetchOsmLanes(s);
   const laneArr = s.intersections && s.intersections[0] && s.intersections[0].lanes;
   const atSig = (RT.sig||[]).some(a=>Math.abs(a-s._at)<=30);
   updateJV(s, dnext, laneArr && laneArr.length>1 ? laneArr : null, atSig);
